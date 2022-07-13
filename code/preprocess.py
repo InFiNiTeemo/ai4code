@@ -10,6 +10,7 @@ data_dir = Path('..//input/')
 if not os.path.exists("./data"):
     os.mkdir("./data")
 
+
 def read_notebook(path):
     return (
         pd.read_json(
@@ -73,6 +74,7 @@ val_df = df.loc[val_ind].reset_index(drop=True)
 # Base markdown dataframes
 train_df_mark = train_df[train_df["cell_type"] == "markdown"].reset_index(drop=True)
 val_df_mark = val_df[val_df["cell_type"] == "markdown"].reset_index(drop=True)
+
 train_df_mark.to_csv("./data/train_mark.csv", index=False)
 val_df_mark.to_csv("./data/val_mark.csv", index=False)
 val_df.to_csv("./data/val.csv", index=False)

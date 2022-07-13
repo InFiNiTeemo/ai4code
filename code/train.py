@@ -16,7 +16,7 @@ parser.add_argument('--model_name_or_path', type=str, default='microsoft/codeber
 parser.add_argument('--train_mark_path', type=str, default='./data/train_mark.csv')
 parser.add_argument('--train_features_path', type=str, default='./data/train_fts.json')
 parser.add_argument('--val_mark_path', type=str, default='./data/val_mark.csv')
-parser.add_argument('--val_features_path', type=str, default='./data/val_fts.csv')
+parser.add_argument('--val_features_path', type=str, default='./data/val_fts.json')
 parser.add_argument('--val_path', type=str, default="./data/val.csv")
 
 parser.add_argument('--md_max_len', type=int, default=64)
@@ -27,7 +27,8 @@ parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
 
 args = parser.parse_args()
-os.mkdir("./outputs")
+if not os.path.exists("./outputs"):
+    os.mkdir("./outputs")
 data_dir = Path('..//input/')
 
 train_df_mark = pd.read_csv(args.train_mark_path).drop("parent_id", axis=1).dropna().reset_index(drop=True)
@@ -104,6 +105,15 @@ def train(model, train_loader, val_loader, epochs):
         preds = []
         labels = []
 
+        if e <= 2:
+            #y_val, y_pred = validate(model, val_loader)
+            #val_df["pred"] = val_df.groupby(["id", "cell_type"])["rank"].rank(pct=True)
+            #val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
+            #y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
+            #print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
+            continue
+        print("epoch:", e)
+
         for idx, data in enumerate(tbar):
             inputs, target = read_data(data)
 
@@ -117,12 +127,15 @@ def train(model, train_loader, val_loader, epochs):
                 optimizer.zero_grad()
                 scheduler.step()
 
+            if idx % 10000 == 0:
+                torch.save(model.state_dict(), f"./outputs/model_{idx}.bin")
+
             loss_list.append(loss.detach().cpu().item())
             preds.append(pred.detach().cpu().numpy().ravel())
             labels.append(target.detach().cpu().numpy().ravel())
 
             avg_loss = np.round(np.mean(loss_list), 4)
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
             tbar.set_description(f"Epoch {e + 1} Loss: {avg_loss} lr: {scheduler.get_last_lr()}")
 
         y_val, y_pred = validate(model, val_loader)
@@ -130,11 +143,12 @@ def train(model, train_loader, val_loader, epochs):
         val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
         y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
         print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
-        torch.save(model.state_dict(), "./outputs/model.bin")
+        torch.save(model.state_dict(), f"./outputs/model_epoch_{e+1}.bin")
 
     return model, y_pred
 
 
 model = MarkdownModel(args.model_name_or_path)
 model = model.cuda()
+model.load_state_dict(torch.load("./outputs/model.bin"))
 model, y_pred = train(model, train_loader, val_loader, epochs=args.epochs)
