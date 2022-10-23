@@ -1,3 +1,6 @@
 input/
 code/outputs/
 code/data/
+code/log
+code/microsoft
+code/.ipynb_checkpoints

@@ -1,4 +1,5 @@
 from bisect import bisect
+import numpy as np
 
 def count_inversions(a):
     inversions = 0
@@ -14,7 +15,7 @@ def kendall_tau(ground_truth, predictions):
     total_inversions = 0
     total_2max = 0  # twice the maximum possible inversions across all instances
     for gt, pred in zip(ground_truth, predictions):
-        ranks = [gt.index(x) for x in pred]  # rank predicted order in terms of ground truth
+        ranks = [np.where(gt==x) for x in pred]  # rank predicted order in terms of ground truth
         total_inversions += count_inversions(ranks)
         n = len(gt)
         total_2max += n * (n - 1)

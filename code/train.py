@@ -105,20 +105,12 @@ def train(model, train_loader, val_loader, epochs):
         preds = []
         labels = []
 
-        if e <= 2:
-            #y_val, y_pred = validate(model, val_loader)
-            #val_df["pred"] = val_df.groupby(["id", "cell_type"])["rank"].rank(pct=True)
-            #val_df.loc[val_df["cell_type"] == "markdown", "pred"] = y_pred
-            #y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
-            #print("Preds score", kendall_tau(df_orders.loc[y_dummy.index], y_dummy))
-            continue
-        print("epoch:", e)
-
         for idx, data in enumerate(tbar):
             inputs, target = read_data(data)
 
             with torch.cuda.amp.autocast():
                 pred = model(*inputs)
+                # print(target.device, pred.device)
                 loss = criterion(pred, target)
             scaler.scale(loss).backward()
             if idx % args.accumulation_steps == 0 or idx == len(tbar) - 1:
@@ -128,7 +120,7 @@ def train(model, train_loader, val_loader, epochs):
                 scheduler.step()
 
             if idx % 10000 == 0:
-                torch.save(model.state_dict(), f"./outputs/model_{idx}.bin")
+                torch.save(model.state_dict(), f"./outputs/yb_model_{idx}.bin")
 
             loss_list.append(loss.detach().cpu().item())
             preds.append(pred.detach().cpu().numpy().ravel())

@@ -110,14 +110,21 @@ def get_features(df):
         features[idx] = dict()
         total_md = sub_df[sub_df.cell_type == "markdown"].shape[0]
         code_sub_df = sub_df[sub_df.cell_type == "code"]
+        md_sub_df = sub_df[sub_df.cell_type == "markdown"]
         total_code = code_sub_df.shape[0]
         codes = sample_cells(code_sub_df.source.values, 20)
+        mds = sample_cells(md_sub_df.source.values, 20)
+
         features[idx]["total_code"] = total_code
         features[idx]["total_md"] = total_md
         features[idx]["codes"] = codes
+        features[idx]["mds"] = mds
     return features
 
-val_fts = get_features(val_df)
-json.dump(val_fts, open("./data/val_fts.json","wt"))
-train_fts = get_features(train_df)
-json.dump(train_fts, open("./data/train_fts.json","wt"))
+#val_fts = get_features(val_df)
+#json.dump(val_fts, open("./data/val_fts.json","wt"))
+#train_fts = get_features(train_df)
+#json.dump(train_fts, open("./data/train_fts.json","wt"))
+
+
+
