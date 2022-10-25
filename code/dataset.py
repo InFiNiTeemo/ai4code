@@ -198,3 +198,104 @@ class LanguageMistakeDataset(Dataset):
 
     def __len__(self):
         return self.df.shape[0]
+
+
+class ClassificationDataset(Dataset):
+    def __init__(self, df, model_name_or_path, total_max_len, md_max_len):
+        super().__init__()
+        self.df = df.reset_index(drop=True)
+        self.md_max_len = md_max_len
+        self.total_max_len = total_max_len  # maxlen allowed by model config
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path)  # BertTokenizer.from_pretrained(model_name_or_path)
+
+    def __getitem__(self, index):
+        row = self.df.iloc[index]
+        text = row.text
+
+        inputs = self.tokenizer.encode_plus(
+            row.text,
+            None,
+            add_special_tokens=True,
+            max_length=self.total_max_len,
+            padding="max_length",
+            return_token_type_ids=True,
+            truncation=True
+        )
+
+        # print(inputs)
+        ids = inputs['input_ids']
+        mask = inputs['attention_mask']
+        target = torch.FloatTensor([row.label])
+
+        with_part_of_speech = False
+        if with_part_of_speech:
+            # text = row.text + self.tokenizer.sep_token_id + row.part_of_speech
+
+            p_inputs = self.tokenizer.encode_plus(
+                row.part_of_speech,
+                None,
+                add_special_tokens=True,
+                max_length=39,
+                padding="max_length",
+                return_token_type_ids=True,
+                truncation=True
+            )
+
+            ids = ids + [self.tokenizer.sep_token_id] + p_inputs['input_ids']
+            mask = mask + [self.tokenizer.sep_token_id] + p_inputs['attention_mask']
+
+        ids = torch.LongTensor(ids)
+        mask = torch.LongTensor(mask)
+
+        assert len(ids) == self.total_max_len
+        assert len(mask) == self.total_max_len
+
+        return ids, mask, target
+
+    def __len__(self):
+        return self.df.shape[0]
+
+
+class ELLDataset(Dataset):
+    def __init__(self, df, model_name_or_path, total_max_len, md_max_len, columns=["label"]):
+        super().__init__()
+        self.df = df.reset_index(drop=True)
+        self.md_max_len = md_max_len
+        self.total_max_len = total_max_len  # maxlen allowed by model config
+        self.columns = columns
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path)  # BertTokenizer.from_pretrained(model_name_or_path)
+
+    def __getitem__(self, index):
+        row = self.df.iloc[index]
+        text = row.text
+
+        inputs = self.tokenizer.encode_plus(
+            row.text,
+            return_tensors=None,
+            add_special_tokens=True,
+            max_length=self.total_max_len,
+            padding="max_length",
+            #return_token_type_ids=True,
+            truncation=True
+        )
+
+        # print(inputs)
+        ids = inputs['input_ids']
+        mask = inputs['attention_mask']
+
+        target = torch.FloatTensor([row[column] for column in self.columns])
+
+        ids = torch.LongTensor(ids)
+        mask = torch.LongTensor(mask)
+
+        assert len(ids) == self.total_max_len
+        assert len(mask) == self.total_max_len
+
+        return ids, mask, target
+
+    def __len__(self):
+        return self.df.shape[0]

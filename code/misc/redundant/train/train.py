@@ -90,8 +90,13 @@ def train(model, train_loader, val_loader, epochs):
     ]
 
     num_train_optimization_steps = int(args.epochs * len(train_loader) / args.accumulation_steps)
-    optimizer = AdamW(optimizer_grouped_parameters, lr=3e-5,
-                      correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
+    optimizer = AdamW([
+            {"params": model.fc.parameters(), "lr": 3e-5},
+            {"params": model.pooler.parameters(), "lr": 3e-5},
+            {"params": model.model.parameters(), "lr": 1e-5},
+        ],
+        lr=5e-4,correct_bias=False
+    )  # To reproduce BertAdam specific behavior set correct_bias=False
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0.05 * num_train_optimization_steps,
                                                 num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
 
@@ -108,10 +113,6 @@ def train(model, train_loader, val_loader, epochs):
         for idx, data in enumerate(tbar):
             inputs, target = read_data(data)
 
-            with torch.cuda.amp.autocast():
-                pred = model(*inputs)
-                # print(target.device, pred.device)
-                loss = criterion(pred, target)
             scaler.scale(loss).backward()
             if idx % args.accumulation_steps == 0 or idx == len(tbar) - 1:
                 scaler.step(optimizer)
