@@ -2,26 +2,10 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="4b86bc2b-d65f-4255-b65b-84b5769e2765" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/code/PW.ipynb" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/infer.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/lm_train.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/pooling.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/preprocess_mucgec.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/test.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/utils/config.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/utils/focal_loss.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/utils/preprocess.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code/yb_train.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/ai4code-baseline.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/ai4code-baseline.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/.ipynb_checkpoints/Untitled-checkpoint.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/code/.ipynb_checkpoints/Untitled-checkpoint.ipynb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/Untitled.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/code/Untitled.ipynb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/code/dataset.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/metrics.py" beforeDir="false" afterPath="$PROJECT_DIR$/code/metrics.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/model.py" beforeDir="false" afterPath="$PROJECT_DIR$/code/model.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/preprocess.py" beforeDir="false" afterPath="$PROJECT_DIR$/code/preprocess.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/run.sh" beforeDir="false" afterPath="$PROJECT_DIR$/code/run.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/code/train.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,22 +37,24 @@
   "keyToString": {
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "last_opened_file_path": "/home/mobius/code/ai4code-baseline",
+    "last_opened_file_path": "/home/mobius/code/nlp",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/code" />
+      <recent name="$PROJECT_DIR$/code/utils" />
+      <recent name="$PROJECT_DIR$/code/outputs/kaggle-disaster" />
       <recent name="$PROJECT_DIR$/code/data" />
       <recent name="$PROJECT_DIR$" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
-      <recent name="$PROJECT_DIR$/code/data" />
-      <recent name="$PROJECT_DIR$/code/outputs" />
-      <recent name="$PROJECT_DIR$/code" />
-      <recent name="$PROJECT_DIR$/code/data/public" />
-      <recent name="$PROJECT_DIR$/code/loss" />
+      <recent name="$PROJECT_DIR$/code/misc/redundant/train" />
+      <recent name="$PROJECT_DIR$/code/misc/my_notebooks" />
+      <recent name="$PROJECT_DIR$/code/utils" />
+      <recent name="$PROJECT_DIR$/code/misc/redundant" />
+      <recent name="$PROJECT_DIR$/code/misc/notebook" />
     </key>
   </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
