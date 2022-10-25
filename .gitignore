@@ -1,8 +1,6 @@
-input/
-code/outputs/
-code/data/
-code/log
-code/microsoft
-code/.ipynb_checkpoints
+outputs
+data
+log
+microsoft
 .ipynb_checkpoints
 .idea
