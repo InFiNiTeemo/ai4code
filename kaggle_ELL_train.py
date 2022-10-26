@@ -23,6 +23,7 @@ from sklearn.model_selection import StratifiedKFold
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
+from utils.loss import mcrmse
 
 # from torch.optim import AdamW # no correct bias
 
@@ -41,9 +42,12 @@ parser.add_argument('--md_max_len', type=int, default=64)
 parser.add_argument('--total_max_len', type=int, default=512)
 parser.add_argument('--batch_size', type=int, default=8)
 parser.add_argument('--accumulation_steps', type=int, default=4)
+parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
+parser.add_argument("--experiment_stage", type=int, default=0)
+parser.add_argument("--theme", type=str, default=theme)
 parser.add_argument('--is_train', action='store_true')
 parser.add_argument('--no_train', dest='is_train', action='store_false')
 parser.set_defaults(is_train=True)
@@ -107,7 +111,6 @@ logger = get_logger(filename=logger_path)
 seed_everything(args.seed)
 
 # ** hyper para ** #
-experiment_stage = False
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
 is_train = args.is_train  # .False #True #False
 MyDataset = ELLDatasetNoPadding
@@ -199,7 +202,7 @@ def get_optimizer_grouped_parameters(
 
 
 def train_fold(train_df, val=None, fold=1, **kwargs):
-    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15+"\n")
+    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15 )
     # model
     model = MyModel(args.model_name_or_path, logger=logger)
     model = model.cuda()
@@ -249,10 +252,18 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
                                                 num_cycles=0.5,
                                                 num_training_steps=train_optimization_steps)
 
+    best_epoch = 0
     best_val_score = -1e9
     for epoch in range(args.epochs):
-        best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold,
+        tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold,
                                       best_val_score)
+        if tmp_best_val_score > best_val_score:
+            best_val_score = tmp_best_val_score
+            best_epoch = epoch
+        if epoch >= best_epoch + 2:
+            logger.info("Early stop. ")
+            break
+
     del model
     gc.collect()
     return best_val_score
@@ -263,12 +274,25 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     # criterion = FocalLoss(class_num=2, alpha=torch.FloatTensor([0.7, 0.3]))  # num in test 0 : 1 = 0.385: 0.615
     criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
     scaler = torch.cuda.amp.GradScaler()
+    eval_step = int(len(train_loader) / args.eval_times_per_epoch)
 
     tbar = tqdm(train_loader, file=sys.stdout)
     losses = AverageMeter()
     preds = []
     labels = []
 
+    def eval_fn(_best_val_score, step):
+        y_val, y_pred = validate(model, val_loader)
+        score = -mcrmse(y_val, y_pred, len(target_columns))
+        if score > _best_val_score:
+            logger.info("Best epoch so far.  ")
+            _best_val_score = score
+            torch.save(model.state_dict(),
+                       f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin")
+        logger.info(f"step {step+1}, Validation score:  " + str(round(score, 4)) + "\n")
+        return _best_val_score
+
+    logger.info(f"** epoch{epoch} fold{fold} **\n")
     for idx, data in enumerate(tbar):
         inputs, target = read_data(data)
 
@@ -286,38 +310,20 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         optimizer.zero_grad()
         scheduler.step()
 
-        # if idx % 10000 == 0:
-        #    torch.save(model.state_dict(), f"./outputs/yb_model_{idx}.bin")
-
         losses.update(loss.detach().cpu().item(), args.batch_size)
         preds.append(pred.detach().cpu().numpy().ravel())
         labels.append(target.detach().cpu().numpy().ravel())
         tbar.set_description(f"Epoch {epoch + 1} Loss: {np.round(losses.avg, 4)} lr: {scheduler.get_last_lr()}")
 
-    y_val, y_pred = validate(model, val_loader)
+        if (idx + 1) % eval_step == 0 or idx == len(train_loader) - 1:
+            best_val_score = eval_fn(best_val_score, idx)
 
     # y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
     # val_label = [label for p1, p2, label in val_pairs]
-    def rmse(y, yhat):
-        # print(y, yhat)
-        # print("avg:", np.sqrt(np.mean((yhat - y) ** 2)))
-        y = y.reshape(-1, len(target_columns))
-        yhat = yhat.reshape(-1, len(target_columns))
-        # print(np.sqrt(np.mean((yhat - y) ** 2, axis=0)))
-        return np.mean(np.sqrt(np.mean((yhat - y) ** 2, axis=0)))
 
-    # def rmse():
-    #    return 0
-    score = -rmse(y_val, y_pred)
-    logger.info(f"epoch{epoch} fold{fold}")
     # logger.info(classification_report(y_val, y_pred))
     # print("val:", pd.Series(y_val).value_counts())
     # print("\npred:", pd.Series(y_pred).value_counts())
-    if score > best_val_score:
-        logger.info("Best epoch so far.  ")
-        best_val_score = score
-        torch.save(model.state_dict(), f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin")
-    logger.info("Validation score:" + str(score) + "\n")
 
     del train_loader, val_loader
     gc.collect()
@@ -333,14 +339,14 @@ def fit_data(df):
 
 
 def print_info(args):
-    logger.info("\n\n" + "*"*10 + "New run" + "*"*10)
+    logger.info("\n\n" + "*" * 10 + "New run" + "*" * 10)
 
 
 def train_pipeline():
     print_info(args)
     # read data
     train = pd.read_csv(args.train_path)
-    if experiment_stage:
+    if args.experiment_stage:
         train = train.loc[:1000, ]
         args.epoch = 2
         args.fold = 1
@@ -402,7 +408,7 @@ def test_pipeline():
 def main():
     #
     train_pipeline()
-    #test_pipeline()
+    # test_pipeline()
 
 
 main()
