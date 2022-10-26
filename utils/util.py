@@ -29,3 +29,4 @@ def split_dataset(df, frac=0.9, logger=None):
     train_df = df[df.index.isin(index)]
     val_df = df[~df.index.isin(index)]
     return train_df, val_df
+

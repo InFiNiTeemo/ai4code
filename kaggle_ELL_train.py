@@ -4,33 +4,34 @@ from dataset import *
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader, Dataset
-from model import *
+from model.model import *
 from tqdm import tqdm
-import sys, os
+import sys
+import os
 from metrics import *
 import torch
 import argparse
 from sklearn.metrics import f1_score, classification_report, accuracy_score
 # from focal_loss.focal_loss import FocalLoss
 from utils.focal_loss import FocalLoss
-from utils.preprocess import get_group_dict, get_code_dict
 import random
 import gc
 import pickle
 import ast
-import logging
-from transformers import get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
 from sklearn.model_selection import StratifiedKFold
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
+# from torch.optim import AdamW # no correct bias
+
 
 theme = "kaggle-ELL"
 parser = argparse.ArgumentParser(description='Process some arguments')
 parser.add_argument('--seed', type=int, default=37)
 parser.add_argument('--fold', type=str, default="N")
 parser.add_argument('--model_name_or_path', type=str,
-                    default="microsoft/deberta-v3-large")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-base'))
+                    default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-base'))
 parser.add_argument('--train_path', type=str, default=f"./data/{theme}/train.csv")
 # parser.add_argument('--pair_path', type=str, default="./data/public/train/block1.bin")
 parser.add_argument('--val_path', type=str, default="./data/yb_train.csv")
@@ -60,6 +61,7 @@ def get_model_abbr(model_name):
         "hfl/chinese-macbert-large": "macL",
         'hfl/chinese-macbert-base': "mac",
         'microsoft/deberta-base': "deb",
+        "microsoft/deberta-v3-base": "deb",
         "microsoft/deberta-v3-large": "debL",
         "fnlp/bart-large-chinese": "bartL",
         "hfl/chinese-roberta-wwm-ext": "rob",
@@ -110,11 +112,14 @@ seed_everything(args.seed)
 experiment_stage = False
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
 is_train = args.is_train  # .False #True #False
-MyDataset = ELLDataset
-MyModel = ELLModel
+MyDataset = ELLDatasetNoPadding
+MyModel = ELLModelv2
 
 
 def read_data(data):
+    if hasattr(data, '__getitem__'):
+        data = [data['input_ids'], data['attention_mask'], data['labels']]
+    # print(data[0].size()[-1])
     return tuple(d.cuda() for d in data[:-1]), data[-1].cuda()
 
 
@@ -159,35 +164,6 @@ def get_logits(model, test_loader):
     return y_pred
 
 
-def infer_ensemble(model_list_name, test_loader, test_df):
-    i = 0
-    l = len(test_df)
-    pred = np.zeros(l)
-    for model_path in model_list_name:
-        model = None
-        if i < 5:
-            model = MyModel('hfl/chinese-macbert-large', 1024)
-        else:
-            model = MyModel('hfl/chinese-macbert-base', 768)
-        model.load_state_dict(torch.load(f"./outputs/{model_path}"))
-        model.cuda()
-        cur_pred = test(model, test_loader, test_df)
-        if i < 5:
-            pred += cur_pred / 5
-        else:
-            pred += cur_pred * 0.7 / 10
-        i += 1
-        del model
-        gc.collect()
-    print(pred)
-    f = lambda x: 1 if x >= 0.5 else 0
-    fv = np.vectorize(f)
-    pred = fv(pred)
-    test_df['label'] = pred
-    test_df = test_df[['id', 'label']]
-    test_df.to_csv("submission_ensemble.csv", index=False, sep='\t')
-
-
 def get_optimizer_grouped_parameters(
         model, model_type,
         learning_rate, weight_decay,
@@ -225,7 +201,7 @@ def get_optimizer_grouped_parameters(
 
 
 def train_fold(train_df, val=None, fold=1, **kwargs):
-    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15 + "\n\n")
+    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15+"\n")
     # model
     model = MyModel(args.model_name_or_path, logger=logger)
     model = model.cuda()
@@ -238,6 +214,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         train = train_df
     # print(len(train), len(val))
 
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     # dataset
     train_ds = MyDataset(train, model_name_or_path=args.model_name_or_path,
                          md_max_len=args.md_max_len,
@@ -248,8 +225,10 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
                        total_max_len=args.total_max_len,
                        columns=target_columns)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
+                              collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                               pin_memory=False, drop_last=False)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
+                            collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                             pin_memory=False, drop_last=False)
 
     # scheduler
@@ -295,6 +274,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         inputs, target = read_data(data)
 
         with torch.cuda.amp.autocast():
+            # print(inputs[0].size(), inputs[1].size())
             pred = model(*inputs)
             # print(pred.size(), target.size())
             loss = criterion(pred, target)
@@ -331,13 +311,14 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     #    return 0
     score = -rmse(y_val, y_pred)
     logger.info(f"epoch{epoch} fold{fold}")
-    logger.info("Validation score:" + str(score))
     # logger.info(classification_report(y_val, y_pred))
     # print("val:", pd.Series(y_val).value_counts())
     # print("\npred:", pd.Series(y_pred).value_counts())
     if score > best_val_score:
+        logger.info("Best epoch so far.  ")
         best_val_score = score
         torch.save(model.state_dict(), f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin")
+    logger.info("Validation score:" + str(score) + "\n")
 
     del train_loader, val_loader
     gc.collect()
@@ -352,16 +333,23 @@ def fit_data(df):
     return df
 
 
+def print_info(args):
+    logger.info("\n\n" + "*"*10 + "New run" + "*"*10)
+
+
 def train_pipeline():
-    ## read data
+    print_info(args)
+    # read data
     train = pd.read_csv(args.train_path)
     if experiment_stage:
         train = train.loc[:1000, ]
+        args.epoch = 2
+        args.fold = 1
     val = None
     if val is None and args.n_folds == 1:
         train, val = split_dataset(train)
 
-    ## fit data
+    # fit data
     train, val = fit_data(train), fit_data(val)
 
     # fold
@@ -415,7 +403,7 @@ def test_pipeline():
 def main():
     #
     train_pipeline()
-    test_pipeline()
+    #test_pipeline()
 
 
 main()

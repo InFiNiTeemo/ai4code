@@ -36,3 +36,22 @@ class MinPooling(nn.Module):
         embeddings[input_mask_expanded == 0] = 1e-4
         min_embeddings, _ = torch.min(embeddings, dim=1)
         return min_embeddings
+
+# testing not good
+class MeanMaxPooling(nn.Module):
+    def __init__(self):
+        super(MeanMaxPooling, self).__init__()
+
+    def forward(self, last_hidden_state):
+        mean_pooling_embeddings = torch.mean(last_hidden_state, 1)
+        _, max_pooling_embeddings = torch.max(last_hidden_state, 1)
+        mean_max_embeddings = torch.cat((mean_pooling_embeddings, max_pooling_embeddings), 1)
+        # logits = nn.Linear(hidden_size*2, 1)(mean_max_embeddings) # twice the hidden size
+        return mean_max_embeddings
+
+        #print(f'Last Hidden State Output Shape: {last_hidden_state.detach().numpy().shape}')
+        #print(f'Mean-Max Embeddings Output Shape: {mean_max_embeddings.detach().numpy().shape}')
+        #print(f'Logits Shape: {logits.detach().numpy().shape}')
+
+
+

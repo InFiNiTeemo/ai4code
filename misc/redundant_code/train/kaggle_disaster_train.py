@@ -4,23 +4,23 @@ from dataset import *
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader, Dataset
-from model import *
+from model.model import *
 from tqdm import tqdm
-import sys, os
+import sys
+import os
 from metrics import *
 import torch
 import argparse
 from sklearn.metrics import f1_score, classification_report, accuracy_score
-#from focal_loss.focal_loss import FocalLoss
+# from focal_loss.focal_loss import FocalLoss
 from utils.focal_loss import FocalLoss
-from utils.preprocess import get_group_dict, get_code_dict
 import random
 import gc
 import pickle
 import ast
-import logging
 from transformers import get_cosine_schedule_with_warmup
 from sklearn.model_selection import StratifiedKFold
+from utils.util import AverageMeter
 import time
 
 parser = argparse.ArgumentParser(description='Process some arguments')
@@ -121,23 +121,6 @@ is_train = args.is_train #.False #True #False
 train_loader, val_loader = None, None
 MyDataset = ClassificationDataset
 
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
 
 def read_data(data):
     return tuple(d.cuda() for d in data[:-1]), data[-1].cuda()

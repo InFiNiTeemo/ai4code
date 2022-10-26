@@ -15,8 +15,8 @@ from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import RandomForestClassifier , GradientBoostingClassifier
 
 # Modelling Helpers
-from sklearn.preprocessing import Imputer , Normalizer , scale
-from sklearn.cross_validation import train_test_split , StratifiedKFold
+from sklearn.preprocessing import Normalizer , scale
+from sklearn.model_selection import train_test_split , StratifiedKFold
 from sklearn.feature_selection import RFECV
 
 # Visualisation
@@ -26,7 +26,7 @@ import matplotlib.pylab as pylab
 import seaborn as sns
 
 # Configure visualisations
-%matplotlib inline
+# %matplotlib inline
 mpl.style.use( 'ggplot' )
 sns.set_style( 'white' )
 pylab.rcParams[ 'figure.figsize' ] = 8 , 6
