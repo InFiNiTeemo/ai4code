@@ -48,8 +48,7 @@ parser.add_argument('--no_train', dest='is_train', action='store_false')
 parser.set_defaults(is_train=True)
 
 args = parser.parse_args()
-if not os.path.exists("./outputs"):
-    os.mkdir("./outputs")
+os.makedirs("./outputs", exist_ok=True)
 data_dir = Path('../input/')
 
 
@@ -101,10 +100,8 @@ def seed_everything(seed):
 
 # ** settings ** #
 logger_path = f"./log/{theme}/train_{get_model_abbr(args.model_name_or_path)}"
-if not os.path.exists(os.path.dirname(logger_path)):
-    os.mkdir(os.path.dirname(logger_path))
-if not os.path.exists(f"./outputs/{theme}/"):
-    os.mkdir(f"./outputs/{theme}/")
+os.makedirs(os.path.dirname(logger_path), exist_ok=True)
+os.makedirs(f"./outputs/{theme}/", exist_ok=True)
 logger = get_logger(filename=logger_path)
 seed_everything(args.seed)
 
