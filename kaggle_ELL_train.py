@@ -23,6 +23,7 @@ from sklearn.model_selection import StratifiedKFold
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
+
 # from torch.optim import AdamW # no correct bias
 
 
@@ -202,6 +203,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     # model
     model = MyModel(args.model_name_or_path, logger=logger)
     model = model.cuda()
+    model = nn.DataParallel(model)
 
     # fold
     if val is None:
