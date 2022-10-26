@@ -48,9 +48,13 @@ parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--experiment_stage", type=int, default=0)
 parser.add_argument("--theme", type=str, default=theme)
+# is_train
+parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
-parser.add_argument('--no_train', dest='is_train', action='store_false')
-parser.set_defaults(is_train=True)
+# is_test
+parser.set_defaults(is_test=False)
+parser.add_argument('--is_test', action='store_true')
+
 
 args = parser.parse_args()
 os.makedirs("./outputs", exist_ok=True)
@@ -406,9 +410,10 @@ def test_pipeline():
 
 
 def main():
-    #
-    train_pipeline()
-    # test_pipeline()
+    if args.is_train:
+        train_pipeline()
+    if args.is_test:
+        test_pipeline()
 
 
 main()
