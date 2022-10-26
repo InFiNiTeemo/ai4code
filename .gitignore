@@ -5,3 +5,4 @@ microsoft
 .ipynb_checkpoints
 .idea.ipynb_checkpoints
 .idea
+!data/kaggle-ELL
