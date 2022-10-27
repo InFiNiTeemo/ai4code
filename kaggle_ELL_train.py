@@ -24,6 +24,7 @@ from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
 from utils.loss import mcrmse
+from dataclasses import dataclass, make_dataclass
 
 # from torch.optim import AdamW # no correct bias
 
@@ -47,6 +48,7 @@ parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
+parser.add_argument("--trained_model_path", type=str, default="./output")
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
@@ -56,7 +58,6 @@ parser.add_argument('--is_train', action='store_true')
 # is_test
 parser.set_defaults(is_test=False)
 parser.add_argument('--is_test', action='store_true')
-
 
 args = parser.parse_args()
 os.makedirs("./outputs", exist_ok=True)
@@ -116,11 +117,24 @@ os.makedirs(f"./outputs/{theme}/", exist_ok=True)
 logger = get_logger(filename=logger_path)
 seed_everything(args.seed)
 
-# ** hyper para ** #
+# ** settings change when project change ** #
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
-is_train = args.is_train  # .False #True #False
-MyDataset = ELLDatasetNoPadding
-MyModel = ELLModelv2
+
+
+# ** hyper para ** #
+# ** CFG only for model config
+
+# todo learn dataclass
+@dataclass
+class CFG:
+    MyDataset = ELLDatasetNoPadding
+    # model
+    MyModel = ELLModelTest  # ELLModelv2
+    dropout_rate = 0.2
+    pooler = MeanPooling
+
+
+cfg = CFG()
 
 
 def read_data(data):
@@ -208,9 +222,10 @@ def get_optimizer_grouped_parameters(
 
 
 def train_fold(train_df, val=None, fold=1, **kwargs):
-    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15 )
+    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     # model
-    model = MyModel(args.model_name_or_path, logger=logger)
+    # model = cfg.MyModel(args.model_name_or_path, logger=logger)
+    model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler)
     model = model.cuda()
     model = nn.DataParallel(model)
 
@@ -224,14 +239,14 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     # dataset
-    train_ds = MyDataset(train, model_name_or_path=args.model_name_or_path,
-                         md_max_len=args.md_max_len,
-                         total_max_len=args.total_max_len,
-                         columns=target_columns)
-    val_ds = MyDataset(val, model_name_or_path=args.model_name_or_path,
-                       md_max_len=args.md_max_len,
-                       total_max_len=args.total_max_len,
-                       columns=target_columns)
+    train_ds = cfg.MyDataset(train, model_name_or_path=args.model_name_or_path,
+                             md_max_len=args.md_max_len,
+                             total_max_len=args.total_max_len,
+                             columns=target_columns)
+    val_ds = cfg.MyDataset(val, model_name_or_path=args.model_name_or_path,
+                           md_max_len=args.md_max_len,
+                           total_max_len=args.total_max_len,
+                           columns=target_columns)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
                               collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                               pin_memory=False, drop_last=False)
@@ -262,7 +277,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     best_val_score = -1e9
     for epoch in range(args.epochs):
         tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold,
-                                      best_val_score)
+                                          best_val_score)
         if tmp_best_val_score > best_val_score:
             best_val_score = tmp_best_val_score
             best_epoch = epoch
@@ -295,7 +310,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             _best_val_score = score
             torch.save(model.state_dict(),
                        f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin")
-        logger.info(f"step {step+1}, Validation score:  " + str(round(score, 4)) + "\n")
+        logger.info(f"step {step + 1}, Validation score:  " + str(round(score, 4)) + "\n")
         return _best_val_score
 
     logger.info(f"** epoch{epoch} fold{fold} **\n")
@@ -321,7 +336,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         labels.append(target.detach().cpu().numpy().ravel())
         tbar.set_description(f"Epoch {epoch + 1} Loss: {np.round(losses.avg, 4)} lr: {scheduler.get_last_lr()}")
 
-        if (idx + 1) % eval_step == 0 or idx == len(train_loader) - 1:
+        if (idx + 1) % eval_step == 0:
             best_val_score = eval_fn(best_val_score, idx)
 
     # y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
@@ -344,56 +359,57 @@ def fit_data(df):
     return df
 
 
-def print_info(args):
+def print_info():
     logger.info("\n\n" + "*" * 10 + "New run" + "*" * 10)
+    for k, v in cfg.__dict__.items():
+        logger.info(f"\t{k}: {v}")
 
 
 def train_pipeline():
+    print_info()
     # read data
     train = pd.read_csv(args.train_path)
     if args.is_experiment_stage:
         train = train.loc[:1000, ]
-        args.epoch = 2
-        args.fold = 1
-    val = None
-    if val is None and args.n_folds == 1:
-        train, val = split_dataset(train)
-
-    # fit data
-    train, val = fit_data(train), fit_data(val)
-
+        args.epoch = 5
+        # args.fold = 1
+    train = fit_data(train)
     # fold
     # mskf = StratifiedKFold(n_splits=args.n_folds, shuffle=True) # for single label
-    mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True)  # for multiple labels
+    mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)  # for multiple labels
     for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
         train.loc[val_, "kfold"] = fold
     train["kfold"] = train["kfold"].astype(int)
+    logger.info(train[train["kfold"]==1].head(10))
 
     best_scores = []
     for f in range(args.n_folds):
-        best_val_score = train_fold(train, val, fold=f)
+        best_val_score = train_fold(train, fold=f)
         best_scores.append(best_val_score)
+        #if args.is_experiment_stage and f==3:
+        #    break
     logger.info("**** Best score in every fold: " + str(best_scores))
 
 
 def test_pipeline():
+    print_info()
     test = pd.read_csv(args.test_path)
     test = fit_data(test)
     test[[target_columns]] = 0
-    test_ds = MyDataset(test, model_name_or_path=args.model_name_or_path,
-                        md_max_len=args.md_max_len,
-                        total_max_len=args.total_max_len,
-                        columns=target_columns)
+    test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
+                            md_max_len=args.md_max_len,
+                            total_max_len=args.total_max_len,
+                            columns=target_columns)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
                              pin_memory=False, drop_last=False)
 
     logits = []
     for fold in range(args.n_folds):
-        pth = f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin"
+        pth = f"{args.trained_model_path}/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin"
 
         ## load model
         s = time.time()
-        model = MyModel(args.model_name_or_path, logger=logger).cuda()
+        model = cfg.MyModel(args.model_name_or_path, logger=logger).cuda()
         model.load_state_dict(torch.load(pth))
         logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
 
@@ -411,13 +427,18 @@ def test_pipeline():
 
 
 def main():
-    print_info(args)
     if args.is_train:
         logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
         train_pipeline()
     if args.is_test:
         logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
         test_pipeline()
-
+    if args.is_experiment_stage:
+        for dropout_rate in [0.2, 0.3]:
+            # for pooler in [MeanPooling, MaxPooling, MinPooling, MeanMaxPooling]:
+            for pooler in [MeanPooling]:
+                cfg.dropout_rate = dropout_rate
+                cfg.pooler = pooler
+                train_pipeline()
 
 main()

@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 
+
 class MeanPooling(nn.Module):
     def __init__(self):
         super(MeanPooling, self).__init__()
@@ -41,10 +42,12 @@ class MinPooling(nn.Module):
 class MeanMaxPooling(nn.Module):
     def __init__(self):
         super(MeanMaxPooling, self).__init__()
+        self.mean_pooling = MeanPooling()
+        self.max_pooling = MaxPooling()
 
-    def forward(self, last_hidden_state):
-        mean_pooling_embeddings = torch.mean(last_hidden_state, 1)
-        _, max_pooling_embeddings = torch.max(last_hidden_state, 1)
+    def forward(self, last_hidden_state, attention_mask):
+        mean_pooling_embeddings = self.mean_pooling(last_hidden_state, attention_mask)
+        max_pooling_embeddings = self.max_pooling(last_hidden_state, attention_mask)
         mean_max_embeddings = torch.cat((mean_pooling_embeddings, max_pooling_embeddings), 1)
         # logits = nn.Linear(hidden_size*2, 1)(mean_max_embeddings) # twice the hidden size
         return mean_max_embeddings
