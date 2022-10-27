@@ -46,8 +46,10 @@ parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
-parser.add_argument("--experiment_stage", type=int, default=0)
 parser.add_argument("--theme", type=str, default=theme)
+# exp_stage
+parser.set_defaults(is_experiment_stage=False)
+parser.add_argument("--is_experiment_stage", action='store_true')
 # is_train
 parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
@@ -347,10 +349,9 @@ def print_info(args):
 
 
 def train_pipeline():
-    print_info(args)
     # read data
     train = pd.read_csv(args.train_path)
-    if args.experiment_stage:
+    if args.is_experiment_stage:
         train = train.loc[:1000, ]
         args.epoch = 2
         args.fold = 1
@@ -410,9 +411,12 @@ def test_pipeline():
 
 
 def main():
+    print_info(args)
     if args.is_train:
+        logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
         train_pipeline()
     if args.is_test:
+        logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
         test_pipeline()
 
 
