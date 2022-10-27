@@ -58,6 +58,9 @@ parser.add_argument('--is_train', action='store_true')
 # is_test
 parser.set_defaults(is_test=False)
 parser.add_argument('--is_test', action='store_true')
+# on_kaggle
+parser.set_defaults(on_kaggle=False)
+parser.add_argument('--on_kaggle', action='store_true')
 
 args = parser.parse_args()
 os.makedirs("./outputs", exist_ok=True)
@@ -129,7 +132,7 @@ target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", 
 class CFG:
     MyDataset = ELLDatasetNoPadding
     # model
-    MyModel = ELLModelTest  # ELLModelv2
+    MyModel = ELLModelv2  # ELLModelv2
     dropout_rate = 0.2
     pooler = MeanPooling
 
@@ -224,8 +227,8 @@ def get_optimizer_grouped_parameters(
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     # model
-    # model = cfg.MyModel(args.model_name_or_path, logger=logger)
-    model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler)
+    model = cfg.MyModel(args.model_name_or_path, logger=logger)
+    # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler)
     model = model.cuda()
     model = nn.DataParallel(model)
 
@@ -423,7 +426,10 @@ def test_pipeline():
 
     submission = pd.read_csv(os.path.join(os.path.dirname(args.test_path), "sample_submission.csv"))
     submission[target_columns] = class_preds
-    submission.to_csv(os.path.join(os.path.dirname(args.test_path), "submission.csv"), index=False)
+    output_path = os.path.join(os.path.dirname(args.test_path), "submission.csv")
+    if args.on_kaggle:
+        output_path = "../submission.csv"
+    submission.to_csv(output_path, index=False)
 
 
 def main():

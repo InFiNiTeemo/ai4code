@@ -17,5 +17,6 @@
 python kaggle_ELL_train.py --total_max_len 1200 --batch_size 2 --epochs 8 --n_workers 8 \
       --seed 43 --n_folds 10 \
       --eval_times_per_epoch 5 \
-      --is_experiment_stage \
+      --is_train
+      # --is_experiment_stage \
       # --model_name_or_path "hfl/chinese-macbert-large" # --train_path ./data/yb_train0.csv --val_path ./data/yb_test0.csv --seed 0  --fold 0  --model_name_or_path "hfl/chinese-roberta-wwm-ext-large"
