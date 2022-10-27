@@ -189,6 +189,18 @@ class ELLModelv2(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
+    def forward(self, ids, mask):
+        if self.use_classification_layer:
+            x = self.model(ids, mask).logits
+            return x
+        out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
+        # out = torch.stack(out_e["hidden_states"])
+        # print("out size:", out_e.size())
+        out = self.pooler(out_e, mask)
+        # print("out size:", out.size())
+        outputs = self.fc(out)
+        # print("outputs size:", outputs.size())
+        return outputs
 
 # mean-max-pooling
 class ELLModelv3(nn.Module):
@@ -249,18 +261,7 @@ class ELLModelv3(nn.Module):
 
 
 
-    def forward(self, ids, mask):
-        if self.use_classification_layer:
-            x = self.model(ids, mask).logits
-            return x
-        out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
-        # out = torch.stack(out_e["hidden_states"])
-        # print("out size:", out_e.size())
-        out = self.pooler(out_e, mask)
-        # print("out size:", out.size())
-        outputs = self.fc(out)
-        # print("outputs size:", outputs.size())
-        return outputs
+
 
 
 class ELLModelTest(nn.Module):
