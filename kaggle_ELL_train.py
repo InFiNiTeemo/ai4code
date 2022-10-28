@@ -48,7 +48,7 @@ parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
-parser.add_argument("--trained_model_path", type=str, default="./output")
+parser.add_argument("--trained_model_path", type=str, default="./outputs")
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
@@ -114,11 +114,13 @@ def seed_everything(seed):
 
 
 # ** settings ** #
-logger_path = f"./log/{theme}/train_{get_model_abbr(args.model_name_or_path)}"
+model_abbr = get_model_abbr(args.model_name_or_path)
+logger_path = f"./log/{theme}/train_{model_abbr}"
 os.makedirs(os.path.dirname(logger_path), exist_ok=True)
 os.makedirs(f"./outputs/{theme}/", exist_ok=True)
 logger = get_logger(filename=logger_path)
 seed_everything(args.seed)
+
 
 # ** settings change when project change ** #
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
@@ -186,42 +188,6 @@ def get_logits(model, test_loader):
     # test_df = test_df[['id', 'label']]
     # test_df.to_csv("submission.csv", index=False, sep='\t')
     return y_pred
-
-
-def get_optimizer_grouped_parameters(
-        model, model_type,
-        learning_rate, weight_decay,
-        layerwise_learning_rate_decay
-):
-    no_decay = ["bias", "LayerNorm.weight"]
-    # initialize lr for task specific layer
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if "fc" in n or "pooler" in n],
-            "weight_decay": 0.0,
-            "lr": learning_rate,
-        },
-    ]
-    # initialize lrs for every layer
-    num_layers = model.model.config.num_hidden_layers
-    layers = [getattr(model, model_type).embeddings] + list(getattr(model, model_type).encoder.layer)
-    layers.reverse()
-    lr = learning_rate
-    for layer in layers:
-        lr *= layerwise_learning_rate_decay
-        optimizer_grouped_parameters += [
-            {
-                "params": [p for n, p in layer.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": weight_decay,
-                "lr": lr,
-            },
-            {
-                "params": [p for n, p in layer.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-                "lr": lr,
-            },
-        ]
-    return optimizer_grouped_parameters
 
 
 def train_fold(train_df, val=None, fold=1, **kwargs):
@@ -312,7 +278,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             logger.info("Best epoch so far.  ")
             _best_val_score = score
             torch.save(model.state_dict(),
-                       f"./outputs/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin")
+                       f"./outputs/{theme}/{model_abbr}_best_F{fold}.bin")
         logger.info(f"step {step + 1}, Validation score:  " + str(round(score, 4)) + "\n")
         return _best_val_score
 
@@ -399,20 +365,24 @@ def test_pipeline():
     test = pd.read_csv(args.test_path)
     test = fit_data(test)
     test[[target_columns]] = 0
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
                             md_max_len=args.md_max_len,
                             total_max_len=args.total_max_len,
                             columns=target_columns)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
-                             pin_memory=False, drop_last=False)
+                             collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
+                             pin_memory = False, drop_last = False)
 
     logits = []
     for fold in range(args.n_folds):
-        pth = f"{args.trained_model_path}/{theme}/{get_model_abbr(args.model_name_or_path)}_best_F{fold}.bin"
+        pth = f"{args.trained_model_path}/{theme}/{model_abbr}_best_F{fold}.bin"
+        # print(pth)
 
         ## load model
         s = time.time()
         model = cfg.MyModel(args.model_name_or_path, logger=logger).cuda()
+        model = nn.DataParallel(model)
         model.load_state_dict(torch.load(pth))
         logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
 

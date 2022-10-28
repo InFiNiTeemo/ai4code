@@ -30,3 +30,37 @@ def split_dataset(df, frac=0.9, logger=None):
     val_df = df[~df.index.isin(index)]
     return train_df, val_df
 
+def get_optimizer_grouped_parameters(
+        model, model_type,
+        learning_rate, weight_decay,
+        layerwise_learning_rate_decay
+):
+    no_decay = ["bias", "LayerNorm.weight"]
+    # initialize lr for task specific layer
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if "fc" in n or "pooler" in n],
+            "weight_decay": 0.0,
+            "lr": learning_rate,
+        },
+    ]
+    # initialize lrs for every layer
+    num_layers = model.model.config.num_hidden_layers
+    layers = [getattr(model, model_type).embeddings] + list(getattr(model, model_type).encoder.layer)
+    layers.reverse()
+    lr = learning_rate
+    for layer in layers:
+        lr *= layerwise_learning_rate_decay
+        optimizer_grouped_parameters += [
+            {
+                "params": [p for n, p in layer.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": weight_decay,
+                "lr": lr,
+            },
+            {
+                "params": [p for n, p in layer.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+                "lr": lr,
+            },
+        ]
+    return optimizer_grouped_parameters

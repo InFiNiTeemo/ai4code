@@ -205,7 +205,7 @@ class ELLModelv2(nn.Module):
 # mean-max-pooling
 class ELLModelv3(nn.Module):
     def __init__(self, model_path, logger=None, layer=5, verbose=False):
-        super(ELLModelv2, self).__init__()
+        super(ELLModelv3, self).__init__()
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
@@ -218,14 +218,13 @@ class ELLModelv3(nn.Module):
         hidden_size = self.config.hidden_size
         # print("hidden_size:", hidden_size)
 
-        self.top = nn.Linear(hidden_size, 2)
         self.lm = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.LayerNorm(hidden_size),
             nn.Linear(hidden_size, 2),
         )
-        self.dp = torch.nn.Dropout(0.2)
+        self.dp = torch.nn.Dropout(0.3)
         self.pooler = MeanPooling()
         self.fc = torch.nn.Linear(hidden_size, 6)
         self._init_weights(self.fc)
