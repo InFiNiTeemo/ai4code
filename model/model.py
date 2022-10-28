@@ -169,7 +169,7 @@ class ELLModelv2(nn.Module):
             nn.LayerNorm(hidden_size),
             nn.Linear(hidden_size, 2),
         )
-        self.dp = torch.nn.Dropout(0.2)
+        self.dp = torch.nn.Dropout(0.3)
         self.pooler = MeanPooling()
         self.fc = torch.nn.Linear(hidden_size, 6)
         self._init_weights(self.fc)
