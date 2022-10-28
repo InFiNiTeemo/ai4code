@@ -398,7 +398,7 @@ def test_pipeline():
     submission[target_columns] = class_preds
     output_path = os.path.join(os.path.dirname(args.test_path), "submission.csv")
     if args.on_kaggle:
-        output_path = "../submission.csv"
+        output_path = "/kaggle/working/submission.csv"
     submission.to_csv(output_path, index=False)
 
 
