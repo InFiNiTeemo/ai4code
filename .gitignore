@@ -5,3 +5,4 @@ log
 microsoft
 .ipynb_checkpoints
 .idea
+*/__pycache__

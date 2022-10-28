@@ -392,7 +392,7 @@ def test_pipeline():
         gc.collect()
 
     logit_preds = sum(np.array(logits)) / args.n_folds  # sum(a) equals sum(a, axis=0)
-    class_preds = np.array([round(x) for x in logit_preds]).reshape(-1, len(target_columns))
+    class_preds = np.array([x for x in logit_preds]).reshape(-1, len(target_columns))
 
     submission = pd.read_csv(os.path.join(os.path.dirname(args.test_path), "sample_submission.csv"))
     submission[target_columns] = class_preds
