@@ -17,7 +17,7 @@
 python kaggle_ELL_train.py --total_max_len 1200 --batch_size 2 --epochs 8 --n_workers 8 \
       --seed 43 --n_folds 5 \
       --eval_times_per_epoch 5 \
-      --is_test
+      --is_train
       #--is_train
       #--is_train
 

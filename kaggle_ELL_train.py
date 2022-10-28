@@ -19,8 +19,6 @@ import gc
 import pickle
 import ast
 from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
-from sklearn.model_selection import StratifiedKFold
-from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
 from utils.loss import mcrmse
@@ -34,7 +32,8 @@ parser = argparse.ArgumentParser(description='Process some arguments')
 parser.add_argument('--seed', type=int, default=37)
 parser.add_argument('--fold', type=str, default="N")
 parser.add_argument('--model_name_or_path', type=str,
-                    default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-base'))
+                    default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-
+parser.add_argument('--model_abbr', type=str, default=None)
 parser.add_argument('--train_path', type=str, default=f"./data/{theme}/train.csv")
 # parser.add_argument('--pair_path', type=str, default="./data/public/train/block1.bin")
 parser.add_argument('--val_path', type=str, default="./data/yb_train.csv")
@@ -81,7 +80,7 @@ def get_model_abbr(model_name):
         "hfl/chinese-roberta-wwm-ext": "rob",
         "hfl/chinese-roberta-wwm-ext-large": "robL",
     }
-    return model_abbr_dict[model_name]
+    return model_abbr_dict.get(model_name, "unknown")
 
 
 def get_logger(filename='train'):
@@ -114,7 +113,10 @@ def seed_everything(seed):
 
 
 # ** settings ** #
-model_abbr = get_model_abbr(args.model_name_or_path)
+if args.model_abbr is None:
+    model_abbr = get_model_abbr(args.model_name_or_path)
+else:
+    model_abbr = args.model_abbr
 logger_path = f"./log/{theme}/train_{model_abbr}"
 os.makedirs(os.path.dirname(logger_path), exist_ok=True)
 os.makedirs(f"./outputs/{theme}/", exist_ok=True)
@@ -343,7 +345,10 @@ def train_pipeline():
         args.epoch = 5
         # args.fold = 1
     train = fit_data(train)
-    # fold
+
+    # create fold
+    from sklearn.model_selection import StratifiedKFold
+    from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
     # mskf = StratifiedKFold(n_splits=args.n_folds, shuffle=True) # for single label
     mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)  # for multiple labels
     for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
@@ -351,13 +356,15 @@ def train_pipeline():
     train["kfold"] = train["kfold"].astype(int)
     logger.info(train[train["kfold"]==1].head(10))
 
+    ##
     best_scores = []
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
-        best_scores.append(best_val_score)
+        best_scores.append(round(best_val_score, 4))
         #if args.is_experiment_stage and f==3:
         #    break
     logger.info("**** Best score in every fold: " + str(best_scores))
+    logger.info("**** Best score Mean " + str(np.mean(best_scores)))
 
 
 def test_pipeline():
