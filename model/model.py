@@ -146,6 +146,7 @@ class ELLModel(nn.Module):
         print("outputs size:", outputs.size())
         return outputs
 
+
 # mean-max-pooling
 class ELLModelv2(nn.Module):
     def __init__(self, model_path, logger=None, layer=5, verbose=False):
@@ -201,6 +202,7 @@ class ELLModelv2(nn.Module):
         outputs = self.fc(out)
         # print("outputs size:", outputs.size())
         return outputs
+
 
 # mean-max-pooling
 class ELLModelv3(nn.Module):
@@ -259,39 +261,34 @@ class ELLModelv3(nn.Module):
         return outputs
 
 
-
-
-
-
 class ELLModelTest(nn.Module):
-    def __init__(self, model_path, logger=None, layer=5, verbose=False, pooler=MaxPooling, dropout_rate=0.2):
+    def __init__(self, model_path, cfg, logger=None, verbose=False):
         super(ELLModelTest, self).__init__()
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
+        self.config.max_position_embeddings = 2048
+        hidden_size = self.config.hidden_size
+        if not cfg.is_bert_dp:
+            self.config.hidden_dropout = 0.
+            self.config.hidden_dropout_prob = 0.
+            self.config.attention_dropout = 0.
+            self.config.attention_probs_dropout_prob = 0.
+
+        # module
         if self.use_classification_layer:
             self.model = AutoModelForSequenceClassification.from_pretrained(model_path, config=self.config)
         else:
             self.model = AutoModel.from_pretrained(model_path, config=self.config)
-
-        # print("hidden_sizes:", vars(self.config), type(self.config))
-        hidden_size = self.config.hidden_size
-        # print("hidden_size:", hidden_size)
-
-        self.lm = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.LayerNorm(hidden_size),
-            nn.Linear(hidden_size, 2),
-        )
-        self.dp = torch.nn.Dropout(dropout_rate)
+        self.dp = torch.nn.Dropout(cfg.fc_dropout_rate)
 
         # pooler
-        self.pooler = pooler()
+        self.pooler = cfg.pooler()
+        self.pooling_layers = cfg.pooling_layers
         if isinstance(self.pooler, MeanMaxPooling):
-            self.fc = torch.nn.Linear(2*hidden_size, 6)
+            self.fc = torch.nn.Linear(2*hidden_size*self.pooling_layers, 6)
         else:
-            self.fc = torch.nn.Linear(hidden_size, 6)
+            self.fc = torch.nn.Linear(hidden_size*self.pooling_layers, 6)
         self._init_weights(self.fc)
 
         if logger is not None and verbose:
@@ -315,10 +312,10 @@ class ELLModelTest(nn.Module):
         if self.use_classification_layer:
             x = self.model(ids, mask).logits
             return x
-        out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
-        # out = torch.stack(out_e["hidden_states"])
+        # out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
+        out_e = list(self.pooler(self.model(ids, mask)["hidden_states"][-i], mask) for i in range(1, self.pooling_layers+1))
         # print("out size:", out_e.size())
-        out = self.pooler(out_e, mask)
+        out = torch.cat(out_e, 1)
         # print("out size:", out.size())
         outputs = self.fc(out)
         # print("outputs size:", outputs.size())

@@ -17,7 +17,6 @@ from utils.preprocess import get_group_dict, get_code_dict
 import random
 import gc
 import pickle
-import ast
 import logging
 
 

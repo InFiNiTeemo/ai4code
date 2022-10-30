@@ -1,28 +1,28 @@
+import copy
+import gc
+import os
+import sys
+import time
 import json
-from pathlib import Path
-from dataset import *
+import random
+import pickle
+import argparse
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset
-from model.model import *
 from tqdm import tqdm
-import sys
-import os
-from metrics import *
-import torch
-import argparse
-from sklearn.metrics import f1_score, classification_report, accuracy_score
-# from focal_loss.focal_loss import FocalLoss
-from utils.focal_loss import FocalLoss
-import random
-import gc
-import pickle
-import ast
-from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
-import time
-from utils.util import AverageMeter, split_dataset
-from utils.loss import mcrmse
+from dataset import *
+from pathlib import Path
+from datetime import datetime
+from torch.utils.data import DataLoader, Dataset
 from dataclasses import dataclass, make_dataclass
+from sklearn.metrics import f1_score, classification_report, accuracy_score
+from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
+from typing import Any
+# my lib
+from model.model import *
+from metrics import *
+from utils.loss import mcrmse
+from utils.util import AverageMeter, split_dataset, increment_path
 
 # from torch.optim import AdamW # no correct bias
 
@@ -51,6 +51,7 @@ parser.add_argument("--trained_model_path", type=str, default="./outputs")
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
+parser.add_argument("--n_exp_stop_fold", type=int, default=1)
 # is_train
 parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
@@ -95,6 +96,10 @@ def get_logger(filename='train'):
     logger.addHandler(handler2)
     return logger
 
+def remove_logger(logger):
+    logger.handlers.clear()
+
+
 
 def get_hidden_size(s: str):
     if s.endswith("large") or s.endswith("Large"):
@@ -113,15 +118,21 @@ def seed_everything(seed):
 
 
 # ** settings ** #
+# path
 if args.model_abbr is None:
     model_abbr = get_model_abbr(args.model_name_or_path)
 else:
     model_abbr = args.model_abbr
-logger_path = f"./log/{theme}/train_{model_abbr}"
-os.makedirs(os.path.dirname(logger_path), exist_ok=True)
-os.makedirs(f"./outputs/{theme}/", exist_ok=True)
-logger = get_logger(filename=logger_path)
 seed_everything(args.seed)
+def set_args():
+    os.makedirs(f"./outputs/{theme}/", exist_ok=True)
+    _output_path = str(increment_path(f"./outputs/{theme}/exp"))
+    # logger
+    logger_path = f"{_output_path}/train_{model_abbr}"
+    os.makedirs(os.path.dirname(logger_path), exist_ok=True)
+    _logger = get_logger(filename=logger_path)
+    return _output_path, _logger
+output_path, logger = set_args()
 
 
 # ** settings change when project change ** #
@@ -132,16 +143,29 @@ target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", 
 # ** CFG only for model config
 
 # todo learn dataclass
+
 @dataclass
 class CFG:
-    MyDataset = ELLDatasetNoPadding
+    MyDataset: Any = ELLDatasetNoPadding
     # model
-    MyModel = ELLModelv2  # ELLModelv2
-    dropout_rate = 0.2
-    pooler = MeanPooling
-
-
+    MyModel: Any = ELLModelTest  # ELLModelv2
+    pooler: Any = MeanPooling
+    fc_dropout_rate: float = 0.2
+    lr: float = 1e-5
+    pooling_layers: int = 1
+    is_bert_dp: bool = False
 cfg = CFG()
+
+
+def get_state_series():
+    series = pd.Series(cfg.__dict__)
+    series["epoch"] = args.epochs
+    series["output_dir"] = output_path.split("/")[-1]
+    stage = "exp" if args.is_experiment_stage else ("train" if args.is_train else "test")
+    series["stage"] = stage
+    series["total_max_len"] = args.total_max_len
+    return series
+state_series = get_state_series()
 
 
 def read_data(data):
@@ -195,7 +219,7 @@ def get_logits(model, test_loader):
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     # model
-    model = cfg.MyModel(args.model_name_or_path, logger=logger)
+    model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger)
     # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler)
     model = model.cuda()
     model = nn.DataParallel(model)
@@ -206,7 +230,11 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         val = train_df[train_df["kfold"] == fold]
     else:
         train = train_df
-    # print(len(train), len(val))
+
+    if args.is_experiment_stage:
+        train = train.head(1000)
+        val = val.head(len(val)//2)
+    # print(f"len dataset: train: {len(train)}, test: {len(val)}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     # dataset
@@ -233,7 +261,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=1e-5,
+    optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.lr,
                       correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
     train_optimization_steps = int(len(train_ds) / args.batch_size * args.epochs)
     num_warmup_steps = train_optimization_steps * 0.02
@@ -273,18 +301,17 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     preds = []
     labels = []
 
-    def eval_fn(_best_val_score, step):
+    def eval_fn(_best_val_score, s):
         y_val, y_pred = validate(model, val_loader)
         score = -mcrmse(y_val, y_pred, len(target_columns))
         if score > _best_val_score:
-            logger.info("Best epoch so far.  ")
+            s = "[Best] " + s
             _best_val_score = score
             torch.save(model.state_dict(),
-                       f"./outputs/{theme}/{model_abbr}_best_F{fold}.bin")
-        logger.info(f"step {step + 1}, Validation score:  " + str(round(score, 4)) + "\n")
-        return _best_val_score
+                       os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+        logger.info(f"{s}, Val score: {round(score, 4)}")
+        return round(_best_val_score, 4)
 
-    logger.info(f"** epoch{epoch} fold{fold} **\n")
     for idx, data in enumerate(tbar):
         inputs, target = read_data(data)
 
@@ -308,7 +335,8 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         tbar.set_description(f"Epoch {epoch + 1} Loss: {np.round(losses.avg, 4)} lr: {scheduler.get_last_lr()}")
 
         if (idx + 1) % eval_step == 0:
-            best_val_score = eval_fn(best_val_score, idx)
+            info_str = f"epoch{epoch}, fold{fold}, step {idx + 1}"
+            best_val_score = eval_fn(best_val_score, info_str)
 
     # y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
     # val_label = [label for p1, p2, label in val_pairs]
@@ -316,7 +344,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     # logger.info(classification_report(y_val, y_pred))
     # print("val:", pd.Series(y_val).value_counts())
     # print("\npred:", pd.Series(y_pred).value_counts())
-
+    logger.info("")
     del train_loader, val_loader
     gc.collect()
     return best_val_score
@@ -331,7 +359,7 @@ def fit_data(df):
 
 
 def print_info():
-    logger.info("\n\n" + "*" * 10 + "New run" + "*" * 10)
+    logger.info("*" * 15 + "  Info  " + "*" * 15)
     for k, v in cfg.__dict__.items():
         logger.info(f"\t{k}: {v}")
 
@@ -340,10 +368,6 @@ def train_pipeline():
     print_info()
     # read data
     train = pd.read_csv(args.train_path)
-    if args.is_experiment_stage:
-        train = train.loc[:1000, ]
-        args.epoch = 5
-        # args.fold = 1
     train = fit_data(train)
 
     # create fold
@@ -354,17 +378,33 @@ def train_pipeline():
     for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
         train.loc[val_, "kfold"] = fold
     train["kfold"] = train["kfold"].astype(int)
-    logger.info(train[train["kfold"]==1].head(10))
+    # logger.info(train[train["kfold"]==1].head(10))
 
     ##
     best_scores = []
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
         best_scores.append(round(best_val_score, 4))
-        #if args.is_experiment_stage and f==3:
-        #    break
+        if args.is_experiment_stage and args.n_exp_stop_fold-1 == f:
+            break
+    cv_score = round(float(np.mean(best_scores)), 4)
     logger.info("**** Best score in every fold: " + str(best_scores))
-    logger.info("**** Best score Mean " + str(np.mean(best_scores)))
+    logger.info("**** Best score Mean " + str(cv_score))
+
+    def save_state():
+        series = copy.deepcopy(state_series)
+        series["scores"] = str(best_scores)
+        series["CV_score"] = cv_score
+        series["time"] = datetime.now().strftime("%m-%d %H:%M")
+        output_df = pd.DataFrame([series])
+        save_path = f"./outputs/{theme}/states.csv"
+        if os.path.exists(save_path):
+            df = pd.read_csv(save_path)
+            output_df = pd.concat([df, output_df], axis=0)
+        logger.info("save state.")
+        output_df.to_csv(save_path, index=False)
+
+    save_state()
 
 
 def test_pipeline():
@@ -379,14 +419,14 @@ def test_pipeline():
                             columns=target_columns)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
                              collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
-                             pin_memory = False, drop_last = False)
+                             pin_memory=False, drop_last=False)
 
     logits = []
     for fold in range(args.n_folds):
         pth = f"{args.trained_model_path}/{theme}/{model_abbr}_best_F{fold}.bin"
         # print(pth)
 
-        ## load model
+        # load model
         s = time.time()
         model = cfg.MyModel(args.model_name_or_path, logger=logger).cuda()
         model = nn.DataParallel(model)
@@ -409,6 +449,41 @@ def test_pipeline():
     submission.to_csv(output_path, index=False)
 
 
+def exp_pipeline():
+    global output_path, logger, state_series
+    meta = {
+        "fc_dropout_rate": [0, 0.1, 0.15, 0.2, 0.25, 0.3],
+        # "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        # "pooling_layers": [3, 2, 1],
+        # "is_bert_dp": [True, False] # False明显改进(再尝试一下)
+    }
+    for i in range(10):
+        p = random.randint(0, len(meta.keys()) - 1)
+        pivot_col = list(meta.keys())[p]
+        val_idx = random.randint(0, len(meta[pivot_col]) - 1)
+        val = meta[pivot_col][val_idx]
+        cfg.__setattr__(pivot_col, val)
+        train_pipeline()
+
+        logger.info("\n..reset logger and path")
+        remove_logger(logger)
+        output_path, logger = set_args()
+        state_series = get_state_series()
+
+    # pivot_col = "pooling_layers"
+    for pivot_col in meta.keys():
+        for idx, val in enumerate(meta[pivot_col]):
+            # for pooler in [MeanPooling, MaxPooling, MinPooling, MeanMaxPooling]:
+            cfg.__setattr__(pivot_col, val)
+            train_pipeline()
+            # if idx != len(meta[pivot_col]) - 1:
+
+            logger.info("\n..reset logger and path")
+            remove_logger(logger)
+            output_path, logger = set_args()
+            state_series = get_state_series()
+
+
 def main():
     if args.is_train:
         logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
@@ -417,11 +492,8 @@ def main():
         logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
         test_pipeline()
     if args.is_experiment_stage:
-        for dropout_rate in [0.2, 0.3]:
-            # for pooler in [MeanPooling, MaxPooling, MinPooling, MeanMaxPooling]:
-            for pooler in [MeanPooling]:
-                cfg.dropout_rate = dropout_rate
-                cfg.pooler = pooler
-                train_pipeline()
+        exp_pipeline()
 
-main()
+
+if __name__ == "__main__":
+    main()

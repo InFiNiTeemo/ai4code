@@ -17,7 +17,6 @@ from utils.focal_loss import FocalLoss
 import random
 import gc
 import pickle
-import ast
 from transformers import get_cosine_schedule_with_warmup
 from sklearn.model_selection import StratifiedKFold
 from utils.util import AverageMeter

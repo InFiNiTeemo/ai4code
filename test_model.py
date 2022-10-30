@@ -17,14 +17,15 @@ from utils.focal_loss import FocalLoss
 import random
 import gc
 import pickle
-import ast
 from transformers import get_cosine_schedule_with_warmup
 from sklearn.model_selection import StratifiedKFold
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
+from typing import Any
 
-def main():
+
+def test_model():
     model_name_or_path = "microsoft/deberta-v3-large"
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     model = ELLModelv2(model_name_or_path)
@@ -38,4 +39,37 @@ def main():
     print(tokenizer.pad(c, max_length=20))
     # print(b)
 
-main()
+def test_pandas():
+    a = [1,2,3]
+    c = pd.Series(a, index=['a', 'c', 'd'])
+    d = pd.Series(a, index=['a', 'c', 'd'])
+    df = pd.DataFrame([c,d])
+    e = pd.DataFrame([pd.Series(a, index=['a', 'c', 'd'])])
+    df = pd.concat([df, e], axis=0)
+    print(df)
+
+from dataclasses import dataclass, make_dataclass
+@dataclass(init=True, repr=True, eq=True)
+class CFG:
+    MyDataset: Any = ELLDatasetNoPadding
+    # model
+    MyModel: Any = ELLModelv2  # ELLModelv2
+    dropout_rate: float = 0.2
+    pooler: Any = MeanPooling
+
+
+cfg = CFG()
+
+def show_config():
+    print(cfg.__dict__)
+    print(vars(cfg))
+    print(cfg.MyModel)
+
+
+def test_variable():
+    from datetime import datetime
+    d = datetime.now().strftime("%m-%d %H:%M")
+    print(d)
+
+if __name__ == "__main__":
+    test_variable()

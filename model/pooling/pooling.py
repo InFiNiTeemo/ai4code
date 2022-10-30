@@ -38,6 +38,7 @@ class MinPooling(nn.Module):
         min_embeddings, _ = torch.min(embeddings, dim=1)
         return min_embeddings
 
+
 # testing not good
 class MeanMaxPooling(nn.Module):
     def __init__(self):
@@ -55,6 +56,25 @@ class MeanMaxPooling(nn.Module):
         #print(f'Last Hidden State Output Shape: {last_hidden_state.detach().numpy().shape}')
         #print(f'Mean-Max Embeddings Output Shape: {mean_max_embeddings.detach().numpy().shape}')
         #print(f'Logits Shape: {logits.detach().numpy().shape}')
+
+
+class AttentionPooling(nn.Module):
+    def __init__(self, in_dim):
+        super().__init__()
+        self.attention = nn.Sequential(
+        nn.Linear(in_dim, in_dim),
+        nn.LayerNorm(in_dim),
+        nn.GELU(),
+        nn.Linear(in_dim, 1),
+        )
+
+    def forward(self, x, mask):
+        w = self.attention(x).float() #
+        w[mask==0]=float('-inf')
+        w = torch.softmax(w,1)
+        x = torch.sum(w * x, dim=1)
+        return x
+
 
 
 
