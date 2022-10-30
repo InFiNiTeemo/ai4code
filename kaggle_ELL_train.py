@@ -360,7 +360,7 @@ def print_info():
         logger.info(f"\t{k}: {v}")
 
 
-@timeit
+@timeit(logger)
 def train_pipeline():
     print_info()
     # read data

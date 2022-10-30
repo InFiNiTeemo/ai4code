@@ -14,7 +14,7 @@
 #python yb_train.py --total_max_len 128 --batch_size 16 --accumulation_steps 4 --epochs 10 --n_workers 8 --train_path ./data/yb_train4.csv --val_path ./data/yb_test4.csv --seed 9  --fold 4  --model_name_or_path 'hfl/chinese-macbert-base'
 
 # 13g ->
-python kaggle_ELL_train.py --total_max_len 512 --batch_size 2 --n_workers 4 \
+python kaggle_ELL_train.py --total_max_len 512 --batch_size 2 --n_workers 2 \
       --seed 43 \
       --n_folds 5 \
       --epochs 8 \
