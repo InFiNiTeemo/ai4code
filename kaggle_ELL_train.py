@@ -360,7 +360,6 @@ def print_info():
         logger.info(f"\t{k}: {v}")
 
 
-@timeit(logger)
 def train_pipeline():
     print_info()
     # read data
@@ -503,13 +502,17 @@ def exp_pipeline():
         study.optimize(objective, n_trials=30)
 
 
-    optuna_optimize()
+    # optuna_optimize()
     meta = {
+        "pooler": [AttentionPooling, MeanPooling],
         "fc_dropout_rate": [0, 0.1, 0.15, 0.2, 0.25, 0.3],
-        # "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
         # "pooling_layers": [3, 2, 1],
-        # "is_bert_dp": [True, False] # False明显改进(再尝试一下)
+        "is_bert_dp": [True, False], # False明显改进(再尝试一下)
+
     }
+    greedy_optimize(meta)
+
 
 
 def main():

@@ -283,7 +283,10 @@ class ELLModelTest(nn.Module):
         self.dp = torch.nn.Dropout(cfg.fc_dropout_rate)
 
         # pooler
-        self.pooler = cfg.pooler()
+        if cfg.pooler == AttentionPooling:
+            self.pooler = cfg.pooler(hidden_size)
+        else:
+            self.pooler = cfg.pooler()
         self.pooling_layers = cfg.pooling_layers
         if isinstance(self.pooler, MeanMaxPooling):
             self.fc = torch.nn.Linear(2*hidden_size*self.pooling_layers, 6)
