@@ -23,6 +23,21 @@ from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import time
 from utils.util import AverageMeter, split_dataset
 from typing import Any
+from functools import wraps
+
+def get_logger(filename='test'):
+    from logging import getLogger, INFO, StreamHandler, FileHandler, Formatter
+    logger = getLogger(__name__)
+    logger.setLevel(INFO)
+    handler1 = StreamHandler()
+    handler1.setFormatter(Formatter("%(message)s"))
+    handler2 = FileHandler(filename=f"{filename}.log")
+    handler2.setFormatter(Formatter("%(message)s"))
+    logger.addHandler(handler1)
+    logger.addHandler(handler2)
+    return logger
+
+logger = get_logger()
 
 
 def test_model():
@@ -48,6 +63,7 @@ def test_pandas():
     df = pd.concat([df, e], axis=0)
     print(df)
 
+
 from dataclasses import dataclass, make_dataclass
 @dataclass(init=True, repr=True, eq=True)
 class CFG:
@@ -66,10 +82,16 @@ def show_config():
     print(cfg.MyModel)
 
 
+
+
 def test_variable():
+    for i in range(int(1e4)):
+        print("")
     from datetime import datetime
     d = datetime.now().strftime("%m-%d %H:%M")
     print(d)
+    return 3
 
 if __name__ == "__main__":
-    test_variable()
+    a = test_variable()
+    print(a)

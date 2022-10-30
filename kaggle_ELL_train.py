@@ -6,6 +6,7 @@ import time
 import json
 import random
 import pickle
+import optuna
 import argparse
 import numpy as np
 import pandas as pd
@@ -22,7 +23,7 @@ from typing import Any
 from model.model import *
 from metrics import *
 from utils.loss import mcrmse
-from utils.util import AverageMeter, split_dataset, increment_path
+from utils.util import AverageMeter, split_dataset, increment_path, timeit
 
 # from torch.optim import AdamW # no correct bias
 
@@ -96,16 +97,9 @@ def get_logger(filename='train'):
     logger.addHandler(handler2)
     return logger
 
+
 def remove_logger(logger):
     logger.handlers.clear()
-
-
-
-def get_hidden_size(s: str):
-    if s.endswith("large") or s.endswith("Large"):
-        return 1024
-    else:
-        return 768
 
 
 def seed_everything(seed):
@@ -124,6 +118,8 @@ if args.model_abbr is None:
 else:
     model_abbr = args.model_abbr
 seed_everything(args.seed)
+
+
 def set_args():
     os.makedirs(f"./outputs/{theme}/", exist_ok=True)
     _output_path = str(increment_path(f"./outputs/{theme}/exp"))
@@ -133,7 +129,6 @@ def set_args():
     _logger = get_logger(filename=logger_path)
     return _output_path, _logger
 output_path, logger = set_args()
-
 
 # ** settings change when project change ** #
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
@@ -164,6 +159,7 @@ def get_state_series():
     stage = "exp" if args.is_experiment_stage else ("train" if args.is_train else "test")
     series["stage"] = stage
     series["total_max_len"] = args.total_max_len
+    series["model_name_or_path"] = args.model_name_or_path
     return series
 state_series = get_state_series()
 
@@ -233,7 +229,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     if args.is_experiment_stage:
         train = train.head(1000)
-        val = val.head(len(val)//2)
+        val = val.head(len(val) // 2)
     # print(f"len dataset: train: {len(train)}, test: {len(val)}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
@@ -364,6 +360,7 @@ def print_info():
         logger.info(f"\t{k}: {v}")
 
 
+@timeit
 def train_pipeline():
     print_info()
     # read data
@@ -385,7 +382,7 @@ def train_pipeline():
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
         best_scores.append(round(best_val_score, 4))
-        if args.is_experiment_stage and args.n_exp_stop_fold-1 == f:
+        if args.is_experiment_stage and args.n_exp_stop_fold - 1 == f:
             break
     cv_score = round(float(np.mean(best_scores)), 4)
     logger.info("**** Best score in every fold: " + str(best_scores))
@@ -405,6 +402,7 @@ def train_pipeline():
         output_df.to_csv(save_path, index=False)
 
     save_state()
+    return cv_score
 
 
 def test_pipeline():
@@ -451,37 +449,67 @@ def test_pipeline():
 
 def exp_pipeline():
     global output_path, logger, state_series
-    meta = {
-        "fc_dropout_rate": [0, 0.1, 0.15, 0.2, 0.25, 0.3],
-        # "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
-        # "pooling_layers": [3, 2, 1],
-        # "is_bert_dp": [True, False] # False明显改进(再尝试一下)
-    }
-    for i in range(10):
+
+    def set_params(params: dict):
+        for p, v in params.items():
+            cfg.__setattr__(p, v)
+
+    def set_params_and_train(params):
+        set_params(params)
+        val = train_pipeline()
+        clear()
+        return val
+
+    def clear():
+        global output_path, logger, state_series
+        remove_logger(logger)
+        output_path, logger = set_args()
+        state_series = get_state_series()
+
+    def greedy_optimize(meta):
+        d = {}
+        best_score = -1e9
+        for pivot_col in meta.keys():
+            for idx, val in enumerate(meta[pivot_col]):
+                set_params(d)
+                cfg.__setattr__(pivot_col, val)
+                score = train_pipeline()
+                if score > best_score:
+                    best_score = score
+                    d[pivot_col] = val
+                clear()
+
+    def random_walk_optimize(meta):
+        # todo go back rate < .. ,
         p = random.randint(0, len(meta.keys()) - 1)
         pivot_col = list(meta.keys())[p]
         val_idx = random.randint(0, len(meta[pivot_col]) - 1)
         val = meta[pivot_col][val_idx]
         cfg.__setattr__(pivot_col, val)
         train_pipeline()
+        clear()
 
-        logger.info("\n..reset logger and path")
-        remove_logger(logger)
-        output_path, logger = set_args()
-        state_series = get_state_series()
+    def optuna_optimize():
+        def objective(trial):
+            meta = {
+                'fc_dropout_rate': trial.suggest_float("fc_dropout_rate", 0, 0.5),
+                "is_bert_dp": trial.suggest_categorical("is_bert_dp", [True, False]),
+                #'n_unit': trial.suggest_int("n_unit", 4, 18)
+            }
+            val = set_params_and_train(meta)
+            return val
 
-    # pivot_col = "pooling_layers"
-    for pivot_col in meta.keys():
-        for idx, val in enumerate(meta[pivot_col]):
-            # for pooler in [MeanPooling, MaxPooling, MinPooling, MeanMaxPooling]:
-            cfg.__setattr__(pivot_col, val)
-            train_pipeline()
-            # if idx != len(meta[pivot_col]) - 1:
+        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
+        study.optimize(objective, n_trials=30)
 
-            logger.info("\n..reset logger and path")
-            remove_logger(logger)
-            output_path, logger = set_args()
-            state_series = get_state_series()
+
+    optuna_optimize()
+    meta = {
+        "fc_dropout_rate": [0, 0.1, 0.15, 0.2, 0.25, 0.3],
+        # "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        # "pooling_layers": [3, 2, 1],
+        # "is_bert_dp": [True, False] # False明显改进(再尝试一下)
+    }
 
 
 def main():

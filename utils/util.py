@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 class AverageMeter(object):
@@ -93,3 +94,16 @@ def increment_path(path, exist_ok=False, sep='', mkdir=False):
         path.mkdir(parents=True, exist_ok=True)  # make directory
 
     return path
+
+def timeit(logger):
+    def log(func):
+        def wrapped(*args, **kwargs):
+            start_time = time.perf_counter()
+            result = func(*args, **kwargs)
+            end_time = time.perf_counter()
+            total_time = end_time - start_time
+            logger.info(f'** Function {func.__name__}{args} {kwargs} Took {total_time:.4f} seconds')
+            return result
+
+        return wrapped
+    return log
