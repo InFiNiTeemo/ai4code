@@ -300,10 +300,9 @@ class ELLDataset(Dataset):
         return self.df.shape[0]
 
 class ELLDatasetNoPadding(Dataset):
-    def __init__(self, df, model_name_or_path, total_max_len, md_max_len, columns=["label"]):
+    def __init__(self, df, model_name_or_path, total_max_len, columns=["label"]):
         super().__init__()
         self.df = df.reset_index(drop=True)
-        self.md_max_len = md_max_len
         self.total_max_len = total_max_len  # maxlen allowed by model config
         self.columns = columns
 

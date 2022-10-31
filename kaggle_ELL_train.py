@@ -15,34 +15,32 @@ from dataset import *
 from pathlib import Path
 from datetime import datetime
 from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW # no correct bias
 from dataclasses import dataclass, make_dataclass
 from sklearn.metrics import f1_score, classification_report, accuracy_score
 from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
 from typing import Any
 # my lib
 from model.model import *
+from utils.time_func import timeSince
 from metrics import *
 from utils.loss import mcrmse
 from utils.util import AverageMeter, split_dataset, increment_path, timeit
 
-# from torch.optim import AdamW # no correct bias
+
 
 
 theme = "kaggle-ELL"
 parser = argparse.ArgumentParser(description='Process some arguments')
 parser.add_argument('--seed', type=int, default=37)
-parser.add_argument('--fold', type=str, default="N")
 parser.add_argument('--model_name_or_path', type=str,
                     default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-
 parser.add_argument('--model_abbr', type=str, default=None)
 parser.add_argument('--train_path', type=str, default=f"./data/{theme}/train.csv")
-# parser.add_argument('--pair_path', type=str, default="./data/public/train/block1.bin")
 parser.add_argument('--val_path', type=str, default="./data/yb_train.csv")
 parser.add_argument('--test_path', type=str, default=f"./data/{theme}/test.csv")
-parser.add_argument('--md_max_len', type=int, default=64)
 parser.add_argument('--total_max_len', type=int, default=512)
 parser.add_argument('--batch_size', type=int, default=8)
-parser.add_argument('--accumulation_steps', type=int, default=4)
 parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--n_workers', type=int, default=8)
@@ -52,7 +50,7 @@ parser.add_argument("--trained_model_path", type=str, default="./outputs")
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
-parser.add_argument("--n_exp_stop_fold", type=int, default=1)
+parser.add_argument("--n_exp_stop_fold", type=int, default=None)
 # is_train
 parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
@@ -144,11 +142,23 @@ class CFG:
     MyDataset: Any = ELLDatasetNoPadding
     # model
     MyModel: Any = ELLModelTest  # ELLModelv2
+    # setting
+    apex = True
+    print_freq: int = 20
+    is_early_stop: bool = False
+    gradient_checkpointing: bool = True
+    accumulation_steps: int = 1
+    batch_size: int = 8
+    # optimizer
+    betas: tuple = (0.9, 0.999)
+    eps: float = 1e-6
+    # para
     pooler: Any = MeanPooling
     fc_dropout_rate: float = 0.2
     lr: float = 1e-5
     pooling_layers: int = 1
     is_bert_dp: bool = False
+    max_grad_norm = 1000
 cfg = CFG()
 
 
@@ -215,9 +225,8 @@ def get_logits(model, test_loader):
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     # model
-    model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger)
-    # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler)
-    model = model.cuda()
+    model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
+    # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler).cuda()
     model = nn.DataParallel(model)
 
     # fold
@@ -235,17 +244,15 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     # dataset
     train_ds = cfg.MyDataset(train, model_name_or_path=args.model_name_or_path,
-                             md_max_len=args.md_max_len,
                              total_max_len=args.total_max_len,
                              columns=target_columns)
     val_ds = cfg.MyDataset(val, model_name_or_path=args.model_name_or_path,
-                           md_max_len=args.md_max_len,
                            total_max_len=args.total_max_len,
                            columns=target_columns)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
                               collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                               pin_memory=False, drop_last=False)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
                             collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                             pin_memory=False, drop_last=False)
 
@@ -258,8 +265,8 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.lr,
-                      correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
-    train_optimization_steps = int(len(train_ds) / args.batch_size * args.epochs)
+                      correct_bias=False, eps=cfg.eps, betas=cfg.betas)  # To reproduce BertAdam specific behavior set correct_bias=False
+    train_optimization_steps = int(len(train_ds) / cfg.batch_size * args.epochs)
     num_warmup_steps = train_optimization_steps * 0.02
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
     #                                            num_training_steps=train_optimization_steps)  # PyTorch scheduler
@@ -276,11 +283,11 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         if tmp_best_val_score > best_val_score:
             best_val_score = tmp_best_val_score
             best_epoch = epoch
-        if epoch >= best_epoch + 2:
+        if cfg.is_early_stop and epoch >= best_epoch + 2:
             logger.info("Early stop. ")
             break
 
-    del model
+    del model, train_ds, val_ds
     gc.collect()
     return best_val_score
 
@@ -288,11 +295,13 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, best_val_score=0, **kwargs):
     model.train()
     # criterion = FocalLoss(class_num=2, alpha=torch.FloatTensor([0.7, 0.3]))  # num in test 0 : 1 = 0.385: 0.615
-    criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
+    # criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
+    criterion = nn.SmoothL1Loss(reduction='mean')
     scaler = torch.cuda.amp.GradScaler()
     eval_step = int(len(train_loader) / args.eval_times_per_epoch)
+    start = end = time.time()
 
-    tbar = tqdm(train_loader, file=sys.stdout)
+    # tbar = tqdm(train_loader, file=sys.stdout)
     losses = AverageMeter()
     preds = []
     labels = []
@@ -303,15 +312,16 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         if score > _best_val_score:
             s = "[Best] " + s
             _best_val_score = score
-            torch.save(model.state_dict(),
-                       os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
-        logger.info(f"{s}, Val score: {round(score, 4)}")
+            if not (args.is_experiment_stage and args.on_kaggle):
+                torch.save(model.state_dict(),
+                           os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+        logger.info("{}, Val score: {:.4f}".format(s, score))
         return round(_best_val_score, 4)
 
-    for idx, data in enumerate(tbar):
+    for step, data in enumerate(train_loader):
         inputs, target = read_data(data)
 
-        with torch.cuda.amp.autocast():
+        with torch.cuda.amp.autocast(enabled=cfg.apex):
             # print(inputs[0].size(), inputs[1].size())
             pred = model(*inputs)
             # print(pred.size(), target.size())
@@ -319,19 +329,38 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             # ce
             # output: [batch_size, nb_classes, *]
             # target [batch_size, *]
+        if cfg.accumulation_steps > 1:
+            loss = loss / cfg.accumulation_steps
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
-        scheduler.step()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+        if (step+1) % cfg.accumulation_steps == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+            scheduler.step()
 
-        losses.update(loss.detach().cpu().item(), args.batch_size)
+        losses.update(loss.detach().cpu().item(), cfg.batch_size)
         preds.append(pred.detach().cpu().numpy().ravel())
         labels.append(target.detach().cpu().numpy().ravel())
-        tbar.set_description(f"Epoch {epoch + 1} Loss: {np.round(losses.avg, 4)} lr: {scheduler.get_last_lr()}")
 
-        if (idx + 1) % eval_step == 0:
-            info_str = f"epoch{epoch}, fold{fold}, step {idx + 1}"
+        # from https://www.kaggle.com/code/yasufuminakama/fb3-deberta-v3-base-baseline-train/notebook
+        if (step+1) % cfg.print_freq == 0 or step == (len(train_loader) - 1):
+            print('Epoch: [{0}][{1}/{2}] '
+                  'Elapsed {remain:s} '
+                  'Loss: {loss.val:.4f}({loss.avg:.4f}) '
+                  'Grad: {grad_norm:.4f}  '
+                  'LR: {lr:.8f}  '
+                  .format(epoch+1, step, len(train_loader),
+                          remain=timeSince(start, float(step + 1) / len(train_loader)),
+                          loss=losses,
+                          grad_norm=grad_norm,
+                          lr=scheduler.get_lr()[0]))
+
+        # todo accumulation
+        # https://www.kaggle.com/code/yasufuminakama/fb3-deberta-v3-base-baseline-train/notebook
+
+        if (step + 1) % eval_step == 0:
+            info_str = f"epoch{epoch}, fold{fold}, step {step+1}"
             best_val_score = eval_fn(best_val_score, info_str)
 
     # y_dummy = val_df.sort_values("pred").groupby('id')['cell_id'].apply(list)
@@ -381,7 +410,7 @@ def train_pipeline():
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
         best_scores.append(round(best_val_score, 4))
-        if args.is_experiment_stage and args.n_exp_stop_fold - 1 == f:
+        if args.is_experiment_stage and (args.n_exp_stop_fold is not None and args.n_exp_stop_fold - 1 == f):
             break
     cv_score = round(float(np.mean(best_scores)), 4)
     logger.info("**** Best score in every fold: " + str(best_scores))
@@ -411,10 +440,9 @@ def test_pipeline():
     test[[target_columns]] = 0
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
-                            md_max_len=args.md_max_len,
                             total_max_len=args.total_max_len,
                             columns=target_columns)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.n_workers,
+    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
                              collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                              pin_memory=False, drop_last=False)
 
@@ -425,7 +453,7 @@ def test_pipeline():
 
         # load model
         s = time.time()
-        model = cfg.MyModel(args.model_name_or_path, logger=logger).cuda()
+        model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
         model = nn.DataParallel(model)
         model.load_state_dict(torch.load(pth))
         logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
@@ -504,11 +532,11 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        "pooler": [AttentionPooling, MeanPooling],
+        "pooler": [MeanPooling], # [AttentionPooling, MeanPooling],
         "fc_dropout_rate": [0, 0.1, 0.15, 0.2, 0.25, 0.3],
-        "lr": [2e-5, 3e-5, 4e-5, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        "lr": [1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
         # "pooling_layers": [3, 2, 1],
-        "is_bert_dp": [True, False], # False明显改进(再尝试一下)
+        "is_bert_dp": True #[True, False], # False明显改进(再尝试一下)
 
     }
     greedy_optimize(meta)

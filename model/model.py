@@ -1,6 +1,7 @@
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
+from torch.utils import checkpoint
 from transformers import AutoModel, AutoTokenizer, AdamW, get_linear_schedule_with_warmup, \
     AutoModelForSequenceClassification, AutoConfig
 from .pooling.pooling import *
@@ -280,6 +281,8 @@ class ELLModelTest(nn.Module):
             self.model = AutoModelForSequenceClassification.from_pretrained(model_path, config=self.config)
         else:
             self.model = AutoModel.from_pretrained(model_path, config=self.config)
+        if cfg.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
         self.dp = torch.nn.Dropout(cfg.fc_dropout_rate)
 
         # pooler
