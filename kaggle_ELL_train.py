@@ -166,12 +166,20 @@ def save_cfg(pth=None):
     d = cfg.__dict__
     cfg_pth = os.path.join(pth, "cfg.bin")
     pickle.dump(d, open(cfg_pth, "wb+"))
-def load_cfg(cfg_pth):
+def load_cfg(cfg_pth, _cfg=None):
+    if _cfg is None:
+        _cfg = cfg
     logger.info("* Load config from: " + cfg_pth)
     d = pickle.load(open(cfg_pth, "rb"))
     for k, v in d.items():
         cfg.__setattr__(k, v)
+def show_cfg(cfg_pth):
+    tmp_cfg = CFG()
+    load_cfg(cfg_pth, tmp_cfg)
+    print_info(tmp_cfg)
+
 cfg = CFG()
+
 
 
 
@@ -398,7 +406,9 @@ def fit_data(df):
     return df
 
 
-def print_info():
+def print_info(_cfg=None):
+    if _cfg is None:
+        _cfg = cfg
     logger.info("*" * 15 + "  Info  " + "*" * 15)
     for k, v in cfg.__dict__.items():
         logger.info(f"\t{k}: {v}")
