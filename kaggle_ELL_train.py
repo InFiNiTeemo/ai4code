@@ -179,7 +179,8 @@ def show_cfg(cfg_pth):
     print_info(tmp_cfg)
 
 cfg = CFG()
-
+if args.cfg_path is not None:
+    load_cfg(args.cfg_path)
 
 
 
