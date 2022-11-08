@@ -34,41 +34,6 @@ def split_dataset(df, frac=0.9, logger=None):
     val_df = df[~df.index.isin(index)]
     return train_df, val_df
 
-def get_optimizer_grouped_parameters(
-        model, model_type,
-        learning_rate, weight_decay,
-        layerwise_learning_rate_decay
-):
-    no_decay = ["bias", "LayerNorm.weight"]
-    # initialize lr for task specific layer
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if "fc" in n or "pooler" in n],
-            "weight_decay": 0.0,
-            "lr": learning_rate,
-        },
-    ]
-    # initialize lrs for every layer
-    num_layers = model.model.config.num_hidden_layers
-    layers = [getattr(model, model_type).embeddings] + list(getattr(model, model_type).encoder.layer)
-    layers.reverse()
-    lr = learning_rate
-    for layer in layers:
-        lr *= layerwise_learning_rate_decay
-        optimizer_grouped_parameters += [
-            {
-                "params": [p for n, p in layer.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": weight_decay,
-                "lr": lr,
-            },
-            {
-                "params": [p for n, p in layer.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-                "lr": lr,
-            },
-        ]
-    return optimizer_grouped_parameters
-
 
 def increment_path(path, exist_ok=False, sep='', mkdir=False):
     # Increment file or directory path, i.e. runs/exp --> runs/exp{sep}2, runs/exp{sep}3, ... etc.
@@ -77,7 +42,7 @@ def increment_path(path, exist_ok=False, sep='', mkdir=False):
         path, suffix = (path.with_suffix(''), path.suffix) if path.is_file() else (path, '')
 
         # Method 1
-        for n in range(2, 9999):
+        for n in range(1, 9999):
             p = f'{path}{sep}{n}{suffix}'  # increment path
             if not os.path.exists(p):  #
                 break
@@ -95,6 +60,7 @@ def increment_path(path, exist_ok=False, sep='', mkdir=False):
 
     return path
 
+from .time_func import asMinutes
 def timeit(logger):
     def log(func):
         def wrapped(*args, **kwargs):
@@ -102,8 +68,11 @@ def timeit(logger):
             result = func(*args, **kwargs)
             end_time = time.perf_counter()
             total_time = end_time - start_time
-            logger.info(f'** Function {func.__name__}{args} {kwargs} Took {total_time:.4f} seconds')
+            logger.info(f'** Function {func.__name__}{args} Took {asMinutes(total_time)}')
+            #{total_time: .4f}
             return result
 
         return wrapped
     return log
+
+

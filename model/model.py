@@ -35,24 +35,6 @@ class Rank1MarkdownModel(nn.Module):
         return out
 
 
-### https://www.kaggle.com/code/rhtsingh/utilizing-transformer-representations-efficiently
-class WeightedLayerPooling(torch.nn.Module):
-    def __init__(self, num_hidden_layers, layer_start: int = 4, layer_weights=None):
-        super(WeightedLayerPooling, self).__init__()
-        self.layer_start = layer_start
-        self.num_hidden_layers = num_hidden_layers
-        self.layer_weights = layer_weights if layer_weights is not None \
-            else torch.nn.Parameter(
-            torch.tensor([1] * (num_hidden_layers + 1 - layer_start), dtype=torch.float)
-        )
-
-    def forward(self, all_hidden_states):
-        all_layer_embedding = all_hidden_states[self.layer_start:, :, :, :]
-        weight_factor = self.layer_weights.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(all_layer_embedding.size())
-        weighted_average = (weight_factor * all_layer_embedding).sum(dim=0) / self.layer_weights.sum()
-        return weighted_average
-
-
 class MarkdownModel(nn.Module):
     def __init__(self, model_path, logger=None, layer=5, verbose=False):
         super(MarkdownModel, self).__init__()
@@ -268,7 +250,7 @@ class ELLModelTest(nn.Module):
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
-        self.config.max_position_embeddings = 2048
+        self.config.max_position_embeddings = 1024
         hidden_size = self.config.hidden_size
         if not cfg.is_bert_dp:
             self.config.hidden_dropout = 0.
@@ -295,6 +277,9 @@ class ELLModelTest(nn.Module):
             self.fc = torch.nn.Linear(2*hidden_size*self.pooling_layers, 6)
         else:
             self.fc = torch.nn.Linear(hidden_size*self.pooling_layers, 6)
+
+        # init weights
+        self.reinit_last_layers(cfg.reinit_layer_num)
         self._init_weights(self.fc)
 
         if logger is not None and verbose:
@@ -313,6 +298,12 @@ class ELLModelTest(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
+
+    def reinit_last_layers(self, layer_num):
+        if layer_num <= 0:
+            return
+        for module in self.model.encoder.layer[-layer_num:].modules():
+            self._init_weights(module)
 
     def forward(self, ids, mask):
         if self.use_classification_layer:

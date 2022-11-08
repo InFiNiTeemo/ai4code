@@ -21,9 +21,12 @@ from sklearn.metrics import f1_score, classification_report, accuracy_score
 from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
 from typing import Any
 # my lib
-from model.model import *
-from utils.time_func import timeSince
 from metrics import *
+from model.model import *
+from model.lr import get_optimizer_grouped_parameters
+from model.adversial.AWP import AWP
+from model.adversial.FGM import FGM
+from utils.time_func import timeSince
 from utils.loss import mcrmse
 from utils.util import AverageMeter, split_dataset, increment_path, timeit
 
@@ -43,6 +46,7 @@ parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
 # cfg
 parser.add_argument("--cfg_path", type=str, default=None)
+parser.add_argument("--parallel", type=int, default=1)
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
@@ -143,23 +147,33 @@ class CFG:
     MyModel: Any = ELLModelTest  # ELLModelv2
     # setting
     apex = True
-    print_freq: int = 20
+    parallel: bool = args.on_kaggle and args.parallel
+    print_freq = 20
     is_early_stop: bool = False
     gradient_checkpointing: bool = True
     accumulation_steps: int = 1
     batch_size: int = 8  # can significantly affect performance
     total_max_len: int = 512
     quick_exp = False
+    max_grad_norm = 1000
+    # adversial
+    attacker: Any = FGM  # FGM
+    adversial_kwargs: dict = None  # mutable default dict() is not allowed
     # optimizer
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-6
+    # lr
+    lr: float = 1e-5 # also encoder_lr
+    is_llrd = True
+    llrd_kwargs = {
+        "new_model_lr": 2*lr
+    }
     # para
     pooler: Any = MeanPooling
     fc_dropout_rate: float = 0.3 # 当batch=2有较大影响， 当batch=8几乎没影响
-    lr: float = 1e-5
     pooling_layers: int = 1
     is_bert_dp: bool = False
-    max_grad_norm = 1000
+    reinit_layer_num: int = 1
 def save_cfg(pth=None):
     if pth is None:
         pth = output_path
@@ -182,6 +196,13 @@ cfg = CFG()
 if args.cfg_path is not None:
     load_cfg(args.cfg_path)
 
+
+def oof():
+    oof_df = pd.read_pickle(CFG.path + 'oof_df.pkl')
+    labels = oof_df[CFG.target_cols].values
+    preds = oof_df[[f"pred_{c}" for c in CFG.target_cols]].values
+    score, scores = 0, 0 # get_score(labels, preds)
+    logger.info(f'Score: {score:<.4f}  Scores: {scores}')
 
 
 def get_state_series():
@@ -243,13 +264,15 @@ def get_logits(model, test_loader):
     # test_df.to_csv("submission.csv", index=False, sep='\t')
     return y_pred
 
-
+@timeit(logger)
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
+    save_cfg()
     # model
     model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
     # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler).cuda()
-    model = nn.DataParallel(model)
+    if cfg.parallel:
+        model = nn.DataParallel(model)
 
     # fold
     if val is None:
@@ -282,10 +305,15 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
+    if cfg.is_llrd:
+        optimizer_grouped_parameters = \
+            get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **kwargs)
+    else:
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+
     optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.lr,
                       correct_bias=False, eps=cfg.eps,
                       betas=cfg.betas)  # To reproduce BertAdam specific behavior set correct_bias=False
@@ -316,7 +344,6 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
 
 def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, best_val_score=0, **kwargs):
-    save_cfg()
     model.train()
     # criterion = FocalLoss(class_num=2, alpha=torch.FloatTensor([0.7, 0.3]))  # num in test 0 : 1 = 0.385: 0.615
     # criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
@@ -329,6 +356,11 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     losses = AverageMeter()
     preds = []
     labels = []
+
+    # adversial
+    attacker = None
+    if cfg.attacker is not None:
+        attacker = cfg.attacker(model)
 
     def eval_fn(_best_val_score, s):
         y_val, y_pred = validate(model, val_loader)
@@ -357,6 +389,15 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             loss = loss / cfg.accumulation_steps
         scaler.scale(loss).backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+
+        if isinstance(attacker, FGM):
+            attacker.attack()
+            with torch.cuda.amp.autocast(enabled=CFG.apex):
+                pred = model(*inputs)
+                loss_adv = criterion(pred, target)
+                loss_adv.backward()
+            attacker.restore()
+
         if (step + 1) % cfg.accumulation_steps == 0:
             scaler.step(optimizer)
             scaler.update()
@@ -466,7 +507,7 @@ def test_pipeline():
     if cfg_path is None:
         cfg_path = os.path.join(args.test_model_path, "cfg.bin")
     load_cfg(cfg_path)
-    logger.info("* Test model path: "+ args.test_model_path)
+    logger.info("* Test model path: " + args.test_model_path)
     print_info()
     test = pd.read_csv(args.test_path)
     test = fit_data(test)
@@ -488,7 +529,8 @@ def test_pipeline():
         # load model
         s = time.time()
         model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
-        model = nn.DataParallel(model)
+        if cfg.parallel:
+            model = nn.DataParallel(model)
         model.load_state_dict(torch.load(pth))
         logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
 

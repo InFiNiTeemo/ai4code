@@ -16,10 +16,12 @@
 # 13g ->
 python kaggle_ELL_train.py --n_workers 2 --seed 43\
       --n_folds 5 \
-      --epochs 5 \
+      --epochs 8 \
       --eval_times_per_epoch 3 \
-      --is_test \
-      --test_model_path outputs/kaggle-ELL/exp65
+      --parallel 0 \
+      --is_train
+      #--is_test \
+      #--test_model_path outputs/kaggle-ELL/exp65
       # --is_train
       #--is_experiment_stage \
       #--is_train
