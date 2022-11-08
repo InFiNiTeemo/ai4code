@@ -19,13 +19,17 @@ python kaggle_ELL_train.py --n_workers 2 --seed 43\
       --epochs 8 \
       --eval_times_per_epoch 3 \
       --parallel 0 \
-      --is_train
-      #--is_test \
-      #--test_model_path outputs/kaggle-ELL/exp65
-      # --is_train
-      #--is_experiment_stage \
-      #--is_train
-      #--is_train
+      --is_oof \
+      --test_model_path outputs/kaggle-ELL/exp93  \
 
-      # --is_experiment_stage \
-      # --model_name_or_path "hfl/chinese-macbert-large" # --train_path ./data/yb_train0.csv --val_path ./data/yb_test0.csv --seed 0  --fold 0  --model_name_or_path "hfl/chinese-roberta-wwm-ext-large"
+
+
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --n_folds 5 \
+#      --epochs 8 \
+#      --eval_times_per_epoch 3 \
+#      --parallel 0 \
+#      --is_oof \
+#      --test_model_path outputs/kaggle-ELL/exp65  \
+#      --on_kaggle \
+#      --parallel 1

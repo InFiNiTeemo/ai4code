@@ -26,18 +26,15 @@ from model.model import *
 from model.lr import get_optimizer_grouped_parameters
 from model.adversial.AWP import AWP
 from model.adversial.FGM import FGM
-from utils.time_func import timeSince
+from utils.time_func import timeSince, timeit
 from utils.loss import mcrmse
-from utils.util import AverageMeter, split_dataset, increment_path, timeit
+from utils.util import AverageMeter, split_dataset, increment_path
 
 theme = "kaggle-ELL"
 parser = argparse.ArgumentParser(description='Process some arguments')
 parser.add_argument('--model_name_or_path', type=str,
                     default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-
 parser.add_argument('--model_abbr', type=str, default=None)
-parser.add_argument('--train_path', type=str, default=f"./data/{theme}/train.csv")
-parser.add_argument('--val_path', type=str, default="./data/yb_train.csv")
-parser.add_argument('--test_path', type=str, default=f"./data/{theme}/test.csv")
 parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--seed', type=int, default=37)
 parser.add_argument('--epochs', type=int, default=5)
@@ -46,7 +43,7 @@ parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
 # cfg
 parser.add_argument("--cfg_path", type=str, default=None)
-parser.add_argument("--parallel", type=int, default=1)
+parser.add_argument("--parallel", type=int, default=0)
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
@@ -54,17 +51,24 @@ parser.add_argument("--n_exp_stop_fold", type=int, default=None)
 # is_train
 parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
-# is_test
+# is_test and is_oof
+parser.set_defaults(is_oof=False)
+parser.add_argument('--is_oof', action='store_true')
 parser.set_defaults(is_test=False)
 parser.add_argument('--is_test', action='store_true')
-parser.add_argument("--test_model_path", type=str, default="./outputs")
+parser.add_argument("--test_model_path", type=str, default=None)
 # on_kaggle
 parser.set_defaults(on_kaggle=False)
 parser.add_argument('--on_kaggle', action='store_true')
+# output path
+parser.add_argument('--output_base_dir', type=str, default=f"./output")
+parser.add_argument('--train_path', type=str, default=f"./data/{theme}/train.csv")
+parser.add_argument('--val_path', type=str, default="./data/yb_train.csv")
+parser.add_argument('--test_path', type=str, default=f"./data/{theme}/test.csv")
+
 
 args = parser.parse_args()
 os.makedirs("./outputs", exist_ok=True)
-data_dir = Path('../input/')
 
 
 def get_model_abbr(model_name):
@@ -118,18 +122,19 @@ else:
     model_abbr = args.model_abbr
 seed_everything(args.seed)
 
-
+theme_path = f"./outputs/{theme}/"
 def set_args():
-    os.makedirs(f"./outputs/{theme}/", exist_ok=True)
-    _output_path = str(increment_path(f"./outputs/{theme}/exp"))
+    os.makedirs(theme_path, exist_ok=True)
+    _output_path = str(increment_path(f"{theme_path}/exp"))
     # logger
     logger_path = f"{_output_path}/train_{model_abbr}"
     os.makedirs(os.path.dirname(logger_path), exist_ok=True)
     _logger = get_logger(filename=logger_path)
     return _output_path, _logger
-
-
 output_path, logger = set_args()
+oof_train_path = os.path.join(theme_path, f"oof_{args.seed}.pkl")
+oof_output_path = os.path.join(output_path, f"oof_df_{args.seed}.pkl")
+
 
 # ** settings change when project change ** #
 target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
@@ -145,7 +150,9 @@ class CFG:
     MyDataset: Any = ELLDatasetNoPadding
     # model
     MyModel: Any = ELLModelTest  # ELLModelv2
+    backbone: Any = args.model_name_or_path  # just to save config
     # setting
+    oof = True
     apex = True
     parallel: bool = args.on_kaggle and args.parallel
     print_freq = 20
@@ -174,6 +181,9 @@ class CFG:
     pooling_layers: int = 1
     is_bert_dp: bool = False
     reinit_layer_num: int = 1
+    # memory
+    oof_score = 1e9
+
 def save_cfg(pth=None):
     if pth is None:
         pth = output_path
@@ -198,11 +208,12 @@ if args.cfg_path is not None:
 
 
 def oof():
-    oof_df = pd.read_pickle(CFG.path + 'oof_df.pkl')
-    labels = oof_df[CFG.target_cols].values
-    preds = oof_df[[f"pred_{c}" for c in CFG.target_cols]].values
-    score, scores = 0, 0 # get_score(labels, preds)
-    logger.info(f'Score: {score:<.4f}  Scores: {scores}')
+    oof_df = pd.read_pickle(oof_output_path)
+    label = oof_df[target_columns].values
+    y_pred = oof_df[[f"pred_{c}" for c in target_columns]].values
+    score = mcrmse(label, y_pred, len(target_columns))
+    logger.info(f'Score: {score:<.4f} ')
+    cfg.oof_score = score
 
 
 def get_state_series():
@@ -236,7 +247,7 @@ def validate(model, val_loader):
             inputs, target = read_data(data)
             with torch.cuda.amp.autocast():
                 pred = model(*inputs)
-            preds.append(pred.detach().cpu().numpy().ravel())
+            preds.append(pred.detach().cpu().numpy().ravel())  # ravel() -> 1d-array
             labels.append(target.detach().cpu().numpy().ravel())
     return np.concatenate(labels), np.concatenate(preds)
 
@@ -471,6 +482,10 @@ def train_pipeline():
     for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
         train.loc[val_, "kfold"] = fold
     train["kfold"] = train["kfold"].astype(int)
+    # save fold
+    if not os.path.exists(oof_train_path):
+        train.to_pickle(oof_train_path)
+
     # logger.info(train[train["kfold"]==1].head(10))
 
     ##
@@ -484,6 +499,9 @@ def train_pipeline():
     logger.info("**** Best score in every fold: " + str(best_scores))
     logger.info("**** Best score Mean " + str(cv_score))
 
+    if args.oof:
+        oof_pipeline()
+
     def save_state():
         state_series = get_state_series()
         series = state_series
@@ -491,7 +509,7 @@ def train_pipeline():
         series["CV_score"] = cv_score
         series["time"] = datetime.now().strftime("%m-%d %H:%M")
         output_df = pd.DataFrame([series])
-        save_path = f"./outputs/{theme}/states.csv"
+        save_path = os.path.join(theme_path, "states.csv")
         if os.path.exists(save_path):
             df = pd.read_csv(save_path)
             output_df = pd.concat([df, output_df], axis=0)
@@ -502,16 +520,7 @@ def train_pipeline():
     return cv_score
 
 
-def test_pipeline():
-    cfg_path = args.cfg_path
-    if cfg_path is None:
-        cfg_path = os.path.join(args.test_model_path, "cfg.bin")
-    load_cfg(cfg_path)
-    logger.info("* Test model path: " + args.test_model_path)
-    print_info()
-    test = pd.read_csv(args.test_path)
-    test = fit_data(test)
-    test[[target_columns]] = 0
+def get_logits_fold(test, test_model_path, is_oof=False):
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
                             total_max_len=cfg.total_max_len,
@@ -522,10 +531,7 @@ def test_pipeline():
 
     logits = []
     for fold in range(args.n_folds):
-        pth = f"{args.test_model_path}/{model_abbr}_best_F{fold}.bin"
-
-        # print(pth)
-
+        pth = f"{test_model_path}/{model_abbr}_best_F{fold}.bin"
         # load model
         s = time.time()
         model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
@@ -535,11 +541,53 @@ def test_pipeline():
         logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
 
         _, pred = validate(model, test_loader)
+
+        if is_oof:
+            mask = np.array(test["kfold"] == fold)
+            pred = (mask[:, None] * pred.reshape(-1, len(target_columns))).ravel()
+            print("shape:", mask.shape, sum(mask))
         logits.append(pred)
         del model
         gc.collect()
+    division = 1 if is_oof else args.n_folds
+    logit_preds = sum(np.array(logits)) / division  # sum(a) equals sum(a, axis=0)
+    return logit_preds
 
-    logit_preds = sum(np.array(logits)) / args.n_folds  # sum(a) equals sum(a, axis=0)
+def get_path():
+    cfg_path = args.cfg_path
+    test_model_path = args.test_model_path
+    if test_model_path is None:
+        test_model_path = output_path
+    if cfg_path is None:
+        cfg_path = os.path.join(test_model_path, "cfg.bin")
+    return cfg_path, test_model_path
+
+
+def oof_pipeline():
+    cfg_path, test_model_path = get_path()
+    load_cfg(cfg_path)
+    logger.info("* OOF model path: " + test_model_path)
+    print_info()
+    # read data
+    train = pd.read_pickle(oof_train_path)
+    # pred
+    logit_preds = get_logits_fold(train, test_model_path, is_oof=True)
+    class_preds = np.array([x for x in logit_preds]).reshape(-1, len(target_columns))
+    train[[f"pred_{c}" for c in target_columns]] = class_preds
+    train.to_pickle(oof_output_path)
+    oof()
+
+
+def test_pipeline():
+    cfg_path, test_model_path = get_path()
+    load_cfg(cfg_path)
+    logger.info("* Test model path: " + test_model_path)
+    print_info()
+    test = pd.read_csv(args.test_path)
+    test = fit_data(test)
+    test[[target_columns]] = 0
+
+    logit_preds = get_logits_fold(test, test_model_path)
     class_preds = np.array([x for x in logit_preds]).reshape(-1, len(target_columns))
 
     submission = pd.read_csv(os.path.join(os.path.dirname(args.test_path), "sample_submission.csv"))
@@ -610,13 +658,13 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        "is_bert_dp": [False, True],
-        "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
-        "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
-        "lr": [1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        # "is_bert_dp": [False, True],
+        # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
+        # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
+        "reinit_layer_num": [0, 1, 2]
         # "pooling_layers": [3, 2, 1],
         # [True, False], # False明显改进(再尝试一下)
-
     }
     greedy_optimize(meta)
 
@@ -625,6 +673,9 @@ def main():
     if args.is_train:
         logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
         train_pipeline()
+    if args.is_oof:
+        logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
+        oof_pipeline()
     if args.is_test:
         logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
         test_pipeline()

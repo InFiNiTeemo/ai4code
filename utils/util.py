@@ -60,19 +60,6 @@ def increment_path(path, exist_ok=False, sep='', mkdir=False):
 
     return path
 
-from .time_func import asMinutes
-def timeit(logger):
-    def log(func):
-        def wrapped(*args, **kwargs):
-            start_time = time.perf_counter()
-            result = func(*args, **kwargs)
-            end_time = time.perf_counter()
-            total_time = end_time - start_time
-            logger.info(f'** Function {func.__name__}{args} Took {asMinutes(total_time)}')
-            #{total_time: .4f}
-            return result
 
-        return wrapped
-    return log
 
 
