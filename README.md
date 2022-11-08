@@ -7,5 +7,5 @@ A project for nlp competition, contains:
 
 ### TODO
 1. pretrain pipeline
-2. solve to many exp folder, (when test, no need to create new exp folder), put exp1, exp2 to exp 
+2. solve too many exp folder, (when test, no need to create new exp folder), move exp1, exp2 to exp 
 

@@ -173,7 +173,7 @@ class CFG:
     lr: float = 1e-5 # also encoder_lr
     is_llrd = True
     llrd_kwargs = {
-        "new_model_lr": 2*lr
+        "new_model_lr": lr
     }
     # para
     pooler: Any = MeanPooling
@@ -499,7 +499,7 @@ def train_pipeline():
     logger.info("**** Best score in every fold: " + str(best_scores))
     logger.info("**** Best score Mean " + str(cv_score))
 
-    if args.oof:
+    if cfg.oof:
         oof_pipeline()
 
     def save_state():
@@ -659,6 +659,7 @@ def exp_pipeline():
     # optuna_optimize()
     meta = {
         "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        "attacker": [FGM, None],
         # "is_bert_dp": [False, True],
         # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
         # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],

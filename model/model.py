@@ -250,7 +250,7 @@ class ELLModelTest(nn.Module):
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
-        self.config.max_position_embeddings = 1024#2048# cfg.total_max_len
+        self.config.max_position_embeddings = cfg.total_max_len # 1024#2048# cfg.total_max_len
         hidden_size = self.config.hidden_size
         if not cfg.is_bert_dp:
             self.config.hidden_dropout = 0.
