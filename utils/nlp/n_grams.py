@@ -1,4 +1,4 @@
-
+from wordcloud import WordCloud, STOPWORDS
 
 
 def generate_ngrams(text, n_gram=1):

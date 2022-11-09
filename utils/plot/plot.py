@@ -63,7 +63,7 @@ def plot_categories(df, cat, target, **kwargs):
 
 
 def plot_correlation_map(df):
-    corr = titanic.corr()
+    corr = df.corr()
     _, ax = plt.subplots(figsize=(12, 10))
     cmap = sns.diverging_palette(220, 10, as_cmap=True)
     _ = sns.heatmap(

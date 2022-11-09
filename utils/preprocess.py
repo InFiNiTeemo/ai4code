@@ -56,7 +56,7 @@ def frozen_literal_eval(node_or_string):
 # fid: code
 def get_code_dict(df):
     # print(df['code'][0])
-    col = df['code'].apply(lambda x: ' '.join([y[2] for y in froze_literal_eval(x)]))
+    col = df['code'].apply(lambda x: ' '.join([y[2] for y in frozen_literal_eval(x)]))
     return dict(zip(df['fid'], col))
 
 

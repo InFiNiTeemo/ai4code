@@ -152,7 +152,7 @@ class CFG:
     MyModel: Any = ELLModelTest  # ELLModelv2
     backbone: Any = args.model_name_or_path  # just to save config
     # setting
-    oof = True
+    oof = False
     apex = True
     parallel: bool = args.on_kaggle and args.parallel
     print_freq = 20
@@ -164,7 +164,7 @@ class CFG:
     quick_exp = False
     max_grad_norm = 1000
     # adversial
-    attacker: Any = FGM  # FGM
+    attacker: Any = None  # FGM about twice the time
     adversial_kwargs: dict = None  # mutable default dict() is not allowed
     # optimizer
     betas: tuple = (0.9, 0.999)
@@ -173,7 +173,7 @@ class CFG:
     lr: float = 1e-5 # also encoder_lr
     is_llrd = True
     llrd_kwargs = {
-        "new_model_lr": lr
+        "new_module_lr": lr
     }
     # para
     pooler: Any = MeanPooling
@@ -318,7 +318,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     if cfg.is_llrd:
         optimizer_grouped_parameters = \
-            get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **kwargs)
+            get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
     else:
         optimizer_grouped_parameters = [
             {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
@@ -621,7 +621,8 @@ def exp_pipeline():
         best_score = -1e9
         for pivot_col in meta.keys():
             if len(meta[pivot_col]) == 1:
-                cfg.__setattr__(pivot_col, meta[pivot_col][0])
+                # cfg.__setattr__(pivot_col, meta[pivot_col][0])
+                d[pivot_col] = meta[pivot_col][0]
                 clear()
             else:
                 for idx, val in enumerate(meta[pivot_col]):
