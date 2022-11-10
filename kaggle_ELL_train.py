@@ -11,18 +11,18 @@ import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from dataset import *
 from pathlib import Path
 from datetime import datetime
 from torch.utils.data import DataLoader, Dataset
 from torch.optim import AdamW  # no correct bias
 from dataclasses import dataclass, make_dataclass
 from sklearn.metrics import f1_score, classification_report, accuracy_score
-from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer
+from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer, AutoModelWithLMHead
 from typing import Any
 # my lib
 from metrics import *
 from model.model import *
+from model.dataset import *
 from model.lr import get_optimizer_grouped_parameters
 from model.adversial.AWP import AWP
 from model.adversial.FGM import FGM
@@ -38,6 +38,7 @@ parser.add_argument('--model_abbr', type=str, default=None)
 parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--seed', type=int, default=37)
 parser.add_argument('--epochs', type=int, default=5)
+parser.add_argument('--batch_size', type=int, default=None)
 parser.add_argument('--n_workers', type=int, default=8)
 parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
@@ -52,6 +53,9 @@ parser.add_argument("--n_exp_stop_fold", type=int, default=None)
 # is_train
 parser.set_defaults(is_train=False)
 parser.add_argument('--is_train', action='store_true')
+# is_pretrain
+parser.set_defaults(is_pretrain=False)
+parser.add_argument('--is_pretrain', action='store_true')
 # is_test and is_oof
 parser.set_defaults(is_oof=False)
 parser.add_argument('--is_oof', action='store_true')
@@ -155,15 +159,21 @@ class CFG:
     # setting
     oof = False
     apex = True
+    epochs:int = args.epochs
     parallel: bool = args.on_kaggle and args.parallel
     print_freq = 20
     is_early_stop: bool = False
     gradient_checkpointing: bool = True
     accumulation_steps: int = 1
-    batch_size: int = 8  # can significantly affect performance
+    batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512
     quick_exp = False
     max_grad_norm = 1000
+    # pretrain
+    is_pretrain: bool = args.is_pretrain
+    pretrain_lr = 1e-6
+    pretrain_epochs = args.epochs
+    pretrain_weight_decay = 1e-6
     # adversial
     attacker: Any = None  # FGM about twice the time
     adversial_kwargs: dict = None  # mutable default dict() is not allowed
@@ -171,8 +181,8 @@ class CFG:
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-6
     # lr
-    lr: float = 1e-5 # also encoder_lr
-    is_llrd = True
+    lr: float = 1e-5  # also encoder_lr
+    is_llrd: bool = True
     llrd_kwargs = {
         "new_module_lr": lr
     }
@@ -219,7 +229,7 @@ def oof():
 
 def get_state_series():
     series = pd.Series(cfg.__dict__)
-    series["epoch"] = args.epochs
+    # series["epoch"] = args.epochs
     series["output_dir"] = output_path.split("/")[-1]
     stage = "exp" if args.is_experiment_stage else ("train" if args.is_train else "test")
     series["stage"] = stage
@@ -281,7 +291,10 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     save_cfg()
     # model
-    model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
+    if cfg.is_pretrain:
+        model = AutoModelWithLMHead.from_pretrained(args.model_name_or_path).cuda()
+    else:
+        model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
     # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler).cuda()
     if cfg.parallel:
         model = nn.DataParallel(model)
@@ -300,10 +313,14 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     # dataset
-    train_ds = cfg.MyDataset(train, model_name_or_path=args.model_name_or_path,
+    train_ds = cfg.MyDataset(train,
+                             model_name_or_path=args.model_name_or_path,
+                             is_pretrain=cfg.is_pretrain,
                              total_max_len=cfg.total_max_len,
                              columns=target_columns)
-    val_ds = cfg.MyDataset(val, model_name_or_path=args.model_name_or_path,
+    val_ds = cfg.MyDataset(val,
+                           model_name_or_path=args.model_name_or_path,
+                           is_pretrain=cfg.is_pretrain,
                            total_max_len=cfg.total_max_len,
                            columns=target_columns)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
@@ -317,19 +334,22 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    if cfg.is_llrd:
-        optimizer_grouped_parameters = \
-            get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
-    else:
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
+    if not cfg.is_pretrain:
+        if cfg.is_llrd:
+            optimizer_grouped_parameters = \
+                get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
+        else:
+            optimizer_grouped_parameters = [
+                {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+                {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+            ]
 
-    optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.lr,
-                      correct_bias=False, eps=cfg.eps,
-                      betas=cfg.betas)  # To reproduce BertAdam specific behavior set correct_bias=False
-    train_optimization_steps = int(len(train_ds) / cfg.batch_size * args.epochs)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.lr,
+                          correct_bias=False, eps=cfg.eps,
+                          betas=cfg.betas)  # To reproduce BertAdam specific behavior set correct_bias=False
+    else:
+        optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.pretrain_weight_decay)
+    train_optimization_steps = int(len(train_ds) / cfg.batch_size * cfg.epochs)
     num_warmup_steps = train_optimization_steps * 0.02
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
     #                                            num_training_steps=train_optimization_steps)  # PyTorch scheduler
@@ -340,8 +360,8 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     best_epoch = 0
     best_val_score = -1e9
-    for epoch in range(args.epochs):
-        tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold,
+    for epoch in range(cfg.epochs):
+        tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer,
                                           best_val_score)
         if tmp_best_val_score > best_val_score:
             best_val_score = tmp_best_val_score
@@ -350,12 +370,17 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
             logger.info("Early stop. ")
             break
 
-    del model, train_ds, val_ds
+    del model, train_ds, val_ds, train_loader, val_loader
     gc.collect()
     return best_val_score
 
 
-def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, best_val_score=0, **kwargs):
+def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer, best_val_score=0, **kwargs):
+    """
+    Args:
+        best_val_score: bigger the better
+    Returns:
+    """
     model.train()
     # criterion = FocalLoss(class_num=2, alpha=torch.FloatTensor([0.7, 0.3]))  # num in test 0 : 1 = 0.385: 0.615
     # criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
@@ -387,13 +412,19 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         return round(_best_val_score, 4)
 
     for step, data in enumerate(train_loader):
+        # 在gpu上的tensor如果引用次数为0, 就会clear
+        # 所以每个循环会清空
         inputs, target = read_data(data)
 
         with torch.cuda.amp.autocast(enabled=cfg.apex):
             # print(inputs[0].size(), inputs[1].size())
-            pred = model(*inputs)
             # print(pred.size(), target.size())
-            loss = criterion(pred, target)
+            if cfg.is_pretrain:
+                pred = model(inputs[0], attention_mask=inputs[1], labels=target)
+                loss = pred.loss
+            else:
+                pred = model(*inputs)
+                loss = criterion(pred, target)
             # ce
             # output: [batch_size, nb_classes, *]
             # target [batch_size, *]
@@ -417,8 +448,12 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             scheduler.step()
 
         losses.update(loss.detach().cpu().item(), cfg.batch_size)
-        preds.append(pred.detach().cpu().numpy().ravel())
-        labels.append(target.detach().cpu().numpy().ravel())
+        if not cfg.is_pretrain:
+            preds.append(pred.detach().cpu().numpy().ravel())  # ravel -> 1d array
+            labels.append(target.detach().cpu().numpy().ravel())
+
+
+
 
         # from https://www.kaggle.com/code/yasufuminakama/fb3-deberta-v3-base-baseline-train/notebook
         if (step + 1) % cfg.print_freq == 0 or step == (len(train_loader) - 1):
@@ -433,10 +468,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
                           grad_norm=grad_norm,
                           lr=scheduler.get_lr()[0]))
 
-        # todo accumulation
-        # https://www.kaggle.com/code/yasufuminakama/fb3-deberta-v3-base-baseline-train/notebook
-
-        if (step + 1) % eval_step == 0:
+        if not cfg.is_pretrain and (step + 1) % eval_step == 0:
             info_str = f"epoch{epoch}, fold{fold}, step {step + 1} , Loss {'%.4f' % losses.avg}"
             best_val_score = eval_fn(best_val_score, info_str)
 
@@ -446,9 +478,16 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     # logger.info(classification_report(y_val, y_pred))
     # print("val:", pd.Series(y_val).value_counts())
     # print("\npred:", pd.Series(y_pred).value_counts())
+    if cfg.is_pretrain:
+        model.save_pretrained(os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+        tokenizer.save_pretrained(os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+        info_str = f"epoch{epoch}, fold{fold}, Loss {'%.4f' % losses.avg}"
+        logger.info(info_str)
+        best_val_score = max(-losses.avg, best_val_score)
+
     logger.info("")
-    del train_loader, val_loader
-    gc.collect()
+    # del train_loader, val_loader
+    # gc.collect()
     return best_val_score
 
 
@@ -672,12 +711,21 @@ def exp_pipeline():
     greedy_optimize(meta)
 
 
+def pretrain_set_cfg():
+    cfg.lr = cfg.pretrain_lr
+    if cfg.pretrain_epochs is not None:
+        cfg.epochs = cfg.pretrain_epochs
+
 def main():
+    if cfg.is_pretrain:
+        logger.info("*" * 8 + "PRETRAIN STAGE" + "*" * 8)
+        pretrain_set_cfg()
+        train_pipeline()
     if args.is_train:
         logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
         train_pipeline()
     if args.is_oof:
-        logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
+        logger.info("*" * 8 + "OOF STAGE" + "*" * 8)
         oof_pipeline()
     if args.is_test:
         logger.info("*" * 8 + "TEST STAGE" + "*" * 8)

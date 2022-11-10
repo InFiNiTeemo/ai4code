@@ -24,7 +24,7 @@ import time
 from utils.util import AverageMeter, split_dataset
 from typing import Any
 from functools import wraps
-from utils.add_model import save_model_locally
+from utils.checkpoint import save_model_locally
 
 def get_logger(filename='test'):
     from logging import getLogger, INFO, StreamHandler, FileHandler, Formatter

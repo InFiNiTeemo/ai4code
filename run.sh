@@ -13,23 +13,25 @@
 #python yb_train.py --total_max_len 128 --batch_size 16 --accumulation_steps 4 --epochs 10 --n_workers 8 --train_path ./data/yb_train3.csv --val_path ./data/yb_test3.csv --seed 8  --fold 3  --model_name_or_path 'hfl/chinese-macbert-base'
 #python yb_train.py --total_max_len 128 --batch_size 16 --accumulation_steps 4 --epochs 10 --n_workers 8 --train_path ./data/yb_train4.csv --val_path ./data/yb_test4.csv --seed 9  --fold 4  --model_name_or_path 'hfl/chinese-macbert-base'
 
-# 13g ->
-#python kaggle_ELL_train.py --n_workers 2 --seed 43\
-#      --n_folds 5 \
-#      --epochs 5 \
-#      --eval_times_per_epoch 3 \
-#      --is_exp
 
-
+# pretrain
 python kaggle_ELL_train.py --n_workers 2 --seed 43\
+      --batch_size 2 \
       --n_folds 5 \
-      --epochs 8 \
+      --epochs 10 \
       --eval_times_per_epoch 3 \
-      --parallel 0 \
-      --is_oof \
-      --test_model_path outputs/kaggle-ELL/exp107
+      --is_pretrain
 
 
+# train
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --model_name_or_path outputs/kaggle-ELL/exp130/deb_best_F0.bin \
+#      --n_folds 5 \
+#      --epochs 8 \
+#      --eval_times_per_epoch 3 \
+#      --is_train
+
+# train
 #python kaggle_ELL_train.py --n_workers 2 --seed 43\
 #      --n_folds 5 \
 #      --epochs 8 \
@@ -39,3 +41,22 @@ python kaggle_ELL_train.py --n_workers 2 --seed 43\
 #      --test_model_path outputs/kaggle-ELL/exp65  \
 #      --on_kaggle \
 #      --parallel 1
+
+# oof
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --n_folds 5 \
+#      --epochs 8 \
+#      --eval_times_per_epoch 3 \
+#      --parallel 0 \
+#      --is_oof \
+#      --test_model_path outputs/kaggle-ELL/exp107
+
+
+
+# exp
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --is_exp
+
