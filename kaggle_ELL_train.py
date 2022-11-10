@@ -44,7 +44,7 @@ parser.add_argument("--theme", type=str, default=theme)
 # cfg
 parser.add_argument("--cfg_path", type=str, default=None)
 parser.set_defaults(parallel=False)
-parser.add_argument("--parallel", ction='store_true')
+parser.add_argument("--parallel", action='store_true')
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
