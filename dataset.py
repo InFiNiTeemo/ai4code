@@ -314,7 +314,6 @@ class ELLDatasetNoPadding(Dataset):
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
-        text = row.text
 
         inputs = self.tokenizer.encode_plus(
             row.text,

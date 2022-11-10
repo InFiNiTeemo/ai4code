@@ -24,6 +24,7 @@ import time
 from utils.util import AverageMeter, split_dataset
 from typing import Any
 from functools import wraps
+from utils.add_model import save_model_locally
 
 def get_logger(filename='test'):
     from logging import getLogger, INFO, StreamHandler, FileHandler, Formatter
@@ -83,7 +84,6 @@ def show_config():
 
 
 
-
 def test_variable():
     for i in range(int(1e4)):
         print("")
@@ -93,5 +93,4 @@ def test_variable():
     return 3
 
 if __name__ == "__main__":
-    a = test_variable()
-    print(a)
+    save_model_locally("microsoft/deberta-v3-base")

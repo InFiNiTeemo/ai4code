@@ -149,3 +149,16 @@ def torch_save_model(model, output_dir, scores, max_save_num=1):
     torch.save(model_to_save.state_dict(),
                os.path.join(output_dir, save_prex))
     print("Saving model checkpoint to %s", output_dir)
+
+
+from transformers import AutoTokenizer, AutoModel
+
+def save_model_locally(model_name_or_path):
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)  # "microsoft/codebert-base")
+    model = AutoModel.from_pretrained(model_name_or_path)
+    model.resize_token_embeddings(len(tokenizer))
+    save_path = model_name_or_path + "X"
+
+    model.save_pretrained(save_path)
+    tokenizer.save_pretrained(save_path)
+

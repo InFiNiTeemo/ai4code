@@ -43,7 +43,8 @@ parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
 # cfg
 parser.add_argument("--cfg_path", type=str, default=None)
-parser.add_argument("--parallel", type=int, default=0)
+parser.set_defaults(parallel=False)
+parser.add_argument("--parallel", ction='store_true')
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
