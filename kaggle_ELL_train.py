@@ -46,6 +46,8 @@ parser.add_argument("--theme", type=str, default=theme)
 parser.add_argument("--cfg_path", type=str, default=None)
 parser.set_defaults(parallel=False)
 parser.add_argument("--parallel", action='store_true')
+# attacker
+parser.add_argument("--attacker", type=str, default=None)
 # exp_stage
 parser.set_defaults(is_experiment_stage=False)
 parser.add_argument("--is_experiment_stage", action='store_true')
@@ -150,6 +152,14 @@ target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", 
 
 # todo learn dataclass
 
+def get_attacker(key):
+    d = {
+        "fgm" : FGM,
+        "awp": AWP,
+        None: None
+    }
+    return d[key]
+
 @dataclass
 class CFG:
     MyDataset: Any = ELLDatasetNoPadding
@@ -159,36 +169,36 @@ class CFG:
     # setting
     oof = False
     apex = True
-    epochs:int = args.epochs
     parallel: bool = args.on_kaggle and args.parallel
-    print_freq = 20
     is_early_stop: bool = False
     gradient_checkpointing: bool = True
+    print_freq = 20
     accumulation_steps: int = 1
+    epochs: int = args.epochs
     batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512
     quick_exp = False
-    max_grad_norm = 1000
+    max_grad_norm: int = 1000  # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
     # pretrain
     is_pretrain: bool = args.is_pretrain
     pretrain_lr = 1e-6
     pretrain_epochs = args.epochs
     pretrain_weight_decay = 1e-6
     # adversial
-    attacker: Any = None  # FGM about twice the time
+    attacker: Any = get_attacker(args.attacker)  # FGM about twice the time
     adversial_kwargs: dict = None  # mutable default dict() is not allowed
     # optimizer
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-6
     # lr
-    lr: float = 1e-5  # also encoder_lr
     is_llrd: bool = True
+    lr: float = 1e-5  # also encoder_lr
     llrd_kwargs = {
-        "new_module_lr": lr
+        "new_module_lr": lr * 2   # * 2 is better
     }
     # para
     pooler: Any = MeanPooling
-    fc_dropout_rate: float = 0.3 # 当batch=2有较大影响， 当batch=8几乎没影响
+    fc_dropout_rate: float = 0.3  # 当batch=2有较大影响， 当batch=8几乎没影响
     pooling_layers: int = 1
     is_bert_dp: bool = False
     reinit_layer_num: int = 1
@@ -290,11 +300,16 @@ def get_logits(model, test_loader):
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
     save_cfg()
+    model_name_or_path = args.model_name_or_path
     # model
     if cfg.is_pretrain:
-        model = AutoModelWithLMHead.from_pretrained(args.model_name_or_path).cuda()
+        model = AutoModelWithLMHead.from_pretrained(model_name_or_path).cuda()
+    elif "exp" in args.model_name_or_path:
+        model_name_or_path = os.path.join(model_name_or_path, f"deb_best_F{fold}.bin")
+        logger.info("use pretrained model: " + model_name_or_path)
+        model = cfg.MyModel(model_name_or_path, cfg, logger=logger).cuda()
     else:
-        model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
+        model = cfg.MyModel(model_name_or_path, cfg, logger=logger).cuda()
     # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler).cuda()
     if cfg.parallel:
         model = nn.DataParallel(model)
@@ -311,15 +326,15 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         val = val.head(len(val) // 2)
     # print(f"len dataset: train: {len(train)}, test: {len(val)}")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     # dataset
     train_ds = cfg.MyDataset(train,
-                             model_name_or_path=args.model_name_or_path,
+                             model_name_or_path=model_name_or_path,
                              is_pretrain=cfg.is_pretrain,
                              total_max_len=cfg.total_max_len,
                              columns=target_columns)
     val_ds = cfg.MyDataset(val,
-                           model_name_or_path=args.model_name_or_path,
+                           model_name_or_path=model_name_or_path,
                            is_pretrain=cfg.is_pretrain,
                            total_max_len=cfg.total_max_len,
                            columns=target_columns)

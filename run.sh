@@ -15,23 +15,40 @@
 
 
 # pretrain
-python kaggle_ELL_train.py --n_workers 2 --seed 43\
-      --batch_size 2 \
-      --n_folds 5 \
-      --epochs 10 \
-      --eval_times_per_epoch 3 \
-      --is_pretrain
-
-
-# train
 #python kaggle_ELL_train.py --n_workers 2 --seed 43\
-#      --model_name_or_path outputs/kaggle-ELL/exp130/deb_best_F0.bin \
+#      --batch_size 2 \
+#      --n_folds 5 \
+#      --epochs 10 \
+#      --eval_times_per_epoch 3 \
+#      --is_pretrain
+
+
+# train from pretrained
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --model_name_or_path outputs/kaggle-ELL/exp139 \
 #      --n_folds 5 \
 #      --epochs 8 \
 #      --eval_times_per_epoch 3 \
 #      --is_train
 
 # train
+#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+#      --n_folds 5 \
+#      --epochs 10 \
+#      --eval_times_per_epoch 3 \
+#      --is_train
+
+# train with FGM
+python kaggle_ELL_train.py --n_workers 2 --seed 43\
+      --n_folds 5 \
+      --epochs 10 \
+      --eval_times_per_epoch 3 \
+      --is_train \
+      --attacker "fgm"
+
+
+
+# oof
 #python kaggle_ELL_train.py --n_workers 2 --seed 43\
 #      --n_folds 5 \
 #      --epochs 8 \
@@ -42,7 +59,6 @@ python kaggle_ELL_train.py --n_workers 2 --seed 43\
 #      --on_kaggle \
 #      --parallel 1
 
-# oof
 #python kaggle_ELL_train.py --n_workers 2 --seed 43\
 #      --n_folds 5 \
 #      --epochs 8 \
