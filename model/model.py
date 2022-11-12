@@ -5,6 +5,7 @@ from torch.utils import checkpoint
 from transformers import AutoModel, AutoTokenizer, AdamW, get_linear_schedule_with_warmup, \
     AutoModelForSequenceClassification, AutoConfig
 from .pooling.pooling import *
+from .module.multisample_dropout import multilabel_dropout
 
 
 # set position embeddings, dropout prob by config
@@ -244,9 +245,9 @@ class ELLModelv3(nn.Module):
         return outputs
 
 
-class ELLModelTest(nn.Module):
+class ELLModelv4(nn.Module):
     def __init__(self, model_path, cfg, logger=None, verbose=False):
-        super(ELLModelTest, self).__init__()
+        super(ELLModelv4, self).__init__()
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
@@ -277,6 +278,81 @@ class ELLModelTest(nn.Module):
             self.fc = torch.nn.Linear(2*hidden_size*self.pooling_layers, 6)
         else:
             self.fc = torch.nn.Linear(hidden_size*self.pooling_layers, 6)
+
+        # init weights
+        self.reinit_last_layers(cfg.reinit_layer_num)
+        self._init_weights(self.fc)
+
+        if logger is not None and verbose:
+            logger.info("Model embedding size:" + str(self.model.embeddings.word_embeddings.weight.data.shape))
+        # nn.init.xavier_uniform_(self.top.tensor, gain=nn.init.calculate_gain('relu'))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    def reinit_last_layers(self, layer_num):
+        if layer_num <= 0:
+            return
+        for module in self.model.encoder.layer[-layer_num:].modules():
+            self._init_weights(module)
+
+    def forward(self, ids, mask):
+        if self.use_classification_layer:
+            x = self.model(ids, mask).logits
+            return x
+        # out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
+        out_e = list(self.pooler(self.model(ids, mask)["hidden_states"][-i], mask) for i in range(1, self.pooling_layers+1))
+        # print("out size:", out_e.size())
+        out = torch.cat(out_e, 1)
+        # print("out size:", out.size())
+        outputs = self.fc(out)
+        # print("outputs size:", outputs.size())
+        return outputs
+
+class ELLModelTest(nn.Module):
+    def __init__(self, model_path, cfg, logger=None, verbose=False):
+        super(ELLModelTest, self).__init__()
+        self.use_classification_layer = False
+        self.config = AutoConfig.from_pretrained(model_path)
+        self.config.update({'output_hidden_states': True})
+        self.config.max_position_embeddings = 512  # 对于一个competition不要改, 设为max_embedding的两倍
+        hidden_size = self.config.hidden_size
+        if not cfg.is_bert_dp:
+            self.config.hidden_dropout = 0.
+            self.config.hidden_dropout_prob = 0.
+            self.config.attention_dropout = 0.
+            self.config.attention_probs_dropout_prob = 0.
+
+        # module
+        if self.use_classification_layer:
+            self.model = AutoModelForSequenceClassification.from_pretrained(model_path, config=self.config)
+        else:
+            self.model = AutoModel.from_pretrained(model_path, config=self.config)
+        if cfg.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+
+        # pooler
+        if cfg.pooler == AttentionPooling:
+            self.pooler = cfg.pooler(hidden_size)
+        else:
+            self.pooler = cfg.pooler()
+        self.pooling_layers = cfg.pooling_layers
+        if isinstance(self.pooler, MeanMaxPooling):
+            linear_size = hidden_size*self.pooling_layers*2
+        else:
+            linear_size = hidden_size * self.pooling_layers
+        self.fc = multilabel_dropout(cfg.fc_dropout_rate, linear_size, 6)
 
         # init weights
         self.reinit_last_layers(cfg.reinit_layer_num)

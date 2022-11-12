@@ -23,7 +23,7 @@ from typing import Any
 from metrics import *
 from model.model import *
 from model.dataset import *
-from model.lr import get_optimizer_grouped_parameters
+from model.lr import get_optimizer_grouped_parameters, get_optimizer_grouped_parameters_v1
 from model.adversial.AWP import AWP
 from model.adversial.FGM import FGM
 from utils.time_func import timeSince, timeit
@@ -174,7 +174,7 @@ class CFG:
     gradient_checkpointing: bool = True
     print_freq = 20
     accumulation_steps: int = 1
-    epochs: int = args.epochs
+    epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
     batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512
     quick_exp = False
@@ -193,15 +193,14 @@ class CFG:
     # lr
     is_llrd: bool = True
     lr: float = 1e-5  # also encoder_lr
-    llrd_kwargs = {
-        "new_module_lr": lr * 2   # * 2 is better
-    }
+    weight_decay = 0.01
+    new_module_lr: float = 5 * lr
     # para
-    pooler: Any = MeanPooling
+    pooler: Any = AttentionPooling
     fc_dropout_rate: float = 0.3  # 当batch=2有较大影响， 当batch=8几乎没影响
     pooling_layers: int = 1
     is_bert_dp: bool = False
-    reinit_layer_num: int = 1
+    reinit_layer_num: int = 0
     # memory
     oof_score = 1e9
 
@@ -261,10 +260,10 @@ def validate(model, val_loader):
     :return: one dimensional label & one dimensional pred
     """
     model.eval()
-    tbar = tqdm(val_loader, file=sys.stdout)
+    # tbar = tqdm(val_loader, file=sys.stdout)
     preds, labels = [], []
     with torch.no_grad():
-        for idx, data in enumerate(tbar):
+        for idx, data in enumerate(val_loader):
             inputs, target = read_data(data)
             with torch.cuda.amp.autocast():
                 pred = model(*inputs)
@@ -351,8 +350,8 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     if not cfg.is_pretrain:
         if cfg.is_llrd:
-            optimizer_grouped_parameters = \
-                get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
+            optimizer_grouped_parameters = get_optimizer_grouped_parameters_v1(cfg, model)
+                #get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
         else:
             optimizer_grouped_parameters = [
                 {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
@@ -375,6 +374,8 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
 
     best_epoch = 0
     best_val_score = -1e9
+
+
     for epoch in range(cfg.epochs):
         tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer,
                                           best_val_score)
@@ -420,7 +421,7 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         if score > _best_val_score:
             s = "[Best] " + s
             _best_val_score = score
-            if not (args.is_experiment_stage and args.on_kaggle):
+            if not (args.is_experiment_stage and args.on_kaggle):   # on kaggle exp do not save
                 torch.save(model.state_dict(),
                            os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
         logger.info("{}, Val score: {:.4f}".format(s, score))
@@ -466,8 +467,6 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
         if not cfg.is_pretrain:
             preds.append(pred.detach().cpu().numpy().ravel())  # ravel -> 1d array
             labels.append(target.detach().cpu().numpy().ravel())
-
-
 
 
         # from https://www.kaggle.com/code/yasufuminakama/fb3-deberta-v3-base-baseline-train/notebook
@@ -545,10 +544,13 @@ def train_pipeline():
 
     ##
     best_scores = []
+    exp = False
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
         best_scores.append(round(best_val_score, 4))
         if args.is_experiment_stage and (args.n_exp_stop_fold is not None and args.n_exp_stop_fold - 1 == f):
+            break
+        if exp:
             break
     cv_score = round(float(np.mean(best_scores)), 4)
     logger.info("**** Best score in every fold: " + str(best_scores))
@@ -714,12 +716,13 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
-        "attacker": [FGM, None],
+        "fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
+        #"lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        #"attacker": [FGM, None],
         # "is_bert_dp": [False, True],
         # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
         # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
-        "reinit_layer_num": [0, 1, 2]
+        #"reinit_layer_num": [0, 1, 2]
         # "pooling_layers": [3, 2, 1],
         # [True, False], # False明显改进(再尝试一下)
     }
