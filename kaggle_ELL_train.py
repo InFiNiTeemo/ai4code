@@ -166,6 +166,8 @@ class CFG:
     # model
     MyModel: Any = ELLModelTest  # ELLModelv2
     backbone: Any = args.model_name_or_path  # just to save config
+    fc: str = "multisample_dropout"  # or "multisample_dropout"
+    target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
     # setting
     oof = False
     apex = True
@@ -174,6 +176,7 @@ class CFG:
     gradient_checkpointing: bool = True
     print_freq = 20
     accumulation_steps: int = 1
+    seed:int = args.seed
     epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
     batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512
@@ -193,14 +196,14 @@ class CFG:
     # lr
     is_llrd: bool = True
     lr: float = 1e-5  # also encoder_lr
-    weight_decay = 0.01
-    new_module_lr: float = 5 * lr
+    weight_decay = 0.01 # 几乎没影响
+    new_module_lr: float = lr  # 3e-5 45.33,  5e-5 45.31
     # para
     pooler: Any = AttentionPooling
-    fc_dropout_rate: float = 0.3  # 当batch=2有较大影响， 当batch=8几乎没影响
+    fc_dropout_rate: float = 0.2  # 会有0.2左右的影响
     pooling_layers: int = 1
     is_bert_dp: bool = False
-    reinit_layer_num: int = 0
+    reinit_layer_num: int = 1  # 可以使result更加稳定
     # memory
     oof_score = 1e9
 
@@ -337,12 +340,12 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
                            is_pretrain=cfg.is_pretrain,
                            total_max_len=cfg.total_max_len,
                            columns=target_columns)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=args.n_workers, # if set seed, shuffle with every try is same
                               collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
-                              pin_memory=False, drop_last=False)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
+                              pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size*2, shuffle=False, num_workers=args.n_workers,
                             collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
-                            pin_memory=False, drop_last=False)
+                            pin_memory=True, drop_last=False)
 
     # scheduler
 
@@ -386,7 +389,8 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
             logger.info("Early stop. ")
             break
 
-    del model, train_ds, val_ds, train_loader, val_loader
+    # del model, train_ds, val_ds, train_loader, val_loader
+    torch.cuda.empty_cache()
     gc.collect()
     return best_val_score
 
@@ -514,6 +518,9 @@ def fit_data(df):
 
 
 def print_info(_cfg=None):
+    cur_date_and_time = datetime.now()
+    print("Time:", cur_date_and_time)
+    # Output: The current date and time is 2022-03-19 10:05:39.482383
     if _cfg is None:
         _cfg = cfg
     logger.info("*" * 15 + "  Info  " + "*" * 15)
@@ -532,7 +539,7 @@ def train_pipeline():
     from sklearn.model_selection import StratifiedKFold
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
     # mskf = StratifiedKFold(n_splits=args.n_folds, shuffle=True) # for single label
-    mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)  # for multiple labels
+    mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=cfg.seed)  # for multiple labels
     for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
         train.loc[val_, "kfold"] = fold
     train["kfold"] = train["kfold"].astype(int)
@@ -701,11 +708,15 @@ def exp_pipeline():
         train_pipeline()
         clear()
 
+    # 尽可能用greedy方法
     def optuna_optimize():
         def objective(trial):
             meta = {
                 'fc_dropout_rate': trial.suggest_float("fc_dropout_rate", 0, 0.5),
                 "is_bert_dp": trial.suggest_categorical("is_bert_dp", [True, False]),
+                'lr': trial.suggest_float("lr", 1e-6, 5e-5),
+                'new_module_lr': trial.suggest_float("new_module_lr", 1e-6, 5e-5),
+                "reinit_layer_num": trial.suggest_int("reinit_layer_num", 0, 1),
                 # 'n_unit': trial.suggest_int("n_unit", 4, 18)
             }
             val = set_params_and_train(meta)
@@ -716,7 +727,8 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        "fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
+        'new_module_lr': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
+        #"fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
         #"lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
         #"attacker": [FGM, None],
         # "is_bert_dp": [False, True],

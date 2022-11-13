@@ -352,7 +352,12 @@ class ELLModelTest(nn.Module):
             linear_size = hidden_size*self.pooling_layers*2
         else:
             linear_size = hidden_size * self.pooling_layers
-        self.fc = multilabel_dropout(cfg.fc_dropout_rate, linear_size, 6)
+
+        out_features = len(cfg.target_columns)
+        if cfg.fc == "multisample_dropout":
+            self.fc = multilabel_dropout(cfg.fc_dropout_rate, linear_size, out_features)
+        else:
+            self.fc = nn.Linear(linear_size, out_features)
 
         # init weights
         self.reinit_last_layers(cfg.reinit_layer_num)
@@ -386,7 +391,15 @@ class ELLModelTest(nn.Module):
             x = self.model(ids, mask).logits
             return x
         # out_e = self.model(ids, mask)["hidden_states"][-1]  # (b, l, h)  -1 represents the last hidden layer
-        out_e = list(self.pooler(self.model(ids, mask)["hidden_states"][-i], mask) for i in range(1, self.pooling_layers+1))
+
+
+        # origin before 11.13
+        # check一下 这里是否用错了
+        # out_e = list(self.pooler(self.model(ids, mask)["hidden_states"][-i], mask) for i in range(1, self.pooling_layers+1))
+        # now 11.13
+        # 大家都这么用
+        out_e = list(self.pooler(self.model(ids, mask)[i], mask) for i in range(0, self.pooling_layers))
+
         # print("out size:", out_e.size())
         out = torch.cat(out_e, 1)
         # print("out size:", out.size())

@@ -32,11 +32,11 @@
 #      --is_train
 
 # train
-# python kaggle_ELL_train.py --n_workers 2 --seed 43\
-#      --n_folds 5 \
-#      --epochs 5 \
-#      --eval_times_per_epoch 3 \
-#      --is_train
+python kaggle_ELL_train.py --n_workers 2 --seed 42\
+      --n_folds 5 \
+      --epochs 10 \
+      --eval_times_per_epoch 3 \
+      --is_train
 
 # train with FGM
 #python kaggle_ELL_train.py --n_workers 2 --seed 43\
@@ -70,9 +70,9 @@
 
 
 # exp
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --is_exp
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --is_exp
 
