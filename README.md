@@ -14,3 +14,23 @@ A project for nlp competition, contains:
 实验
 目前 new_module_lr 1e-5 ~ 4e-5 已尝试
 复现 exp107，  exp93
+
+epoch的数量会影响学习率， 故不是说epoch越大越好
+
+llrd_v2 + new_module_lr 1e-5 (exp) + layer_reinit
+
+
+
+
+
+### backbone
+1. xlm-roberta-base
+2. microsoft/deberta-v3-base
+3. microsoft/deberta-v3-large
+4. microsoft/deberta-v2-xlarge
+5. microsoft/deberta-v2-xlarge-mnli 
+6. microsoft/deberta-v2-xxlarge
+7. funnel-transformer-xlarge
+8. funnel-transformer-large
+9. bigbird-roberta-large
+10. bigbird-roberta-base

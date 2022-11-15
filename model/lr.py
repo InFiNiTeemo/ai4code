@@ -43,8 +43,8 @@ def get_optimizer_grouped_parameters(
 
 # from: https://zhuanlan.zhihu.com/p/449676168
 # https://www.kaggle.com/code/trushk/training-code-13th-place-solution?scriptVersionId=79545533&cellId=20
-def get_optimizer_grouped_parameters_v1(cfg, model):
-    except_patterns = ["embeddings", "encoder"]
+def get_optimizer_grouped_parameters_v1(cfg, model, layerwise_decay=2.6):
+    except_patterns = ["embeddings", "encoder", "model"]
     no_decay = ["bias", "LayerNorm.weight"]
     group1 = ['layer.0.', 'layer.1.', 'layer.2.','layer.3.']
     group2 = ['layer.4.', 'layer.5.', 'layer.6.','layer.7.']
@@ -56,14 +56,14 @@ def get_optimizer_grouped_parameters_v1(cfg, model):
     optimizer_grouped_parameters = [
         # except bias & layerNorm
         {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and not any(nd in n for nd in group_all)],'weight_decay': cfg.weight_decay}, # rel and word embeddings
-        {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and any(nd in n for nd in group1)],'weight_decay': cfg.weight_decay, 'lr': cfg.lr/2.6},
+        {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and any(nd in n for nd in group1)],'weight_decay': cfg.weight_decay, 'lr': cfg.lr/layerwise_decay},
         {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and any(nd in n for nd in group2)],'weight_decay': cfg.weight_decay, 'lr': cfg.lr},
-        {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and any(nd in n for nd in group3)],'weight_decay': cfg.weight_decay, 'lr': cfg.lr*2.6},
+        {'params': [p for n, p in model.model.named_parameters() if not any(nd in n for nd in no_decay) and any(nd in n for nd in group3)],'weight_decay': cfg.weight_decay, 'lr': cfg.lr*layerwise_decay},
         # bias & layerNorm
         {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and not any(nd in n for nd in group_all)],'weight_decay': 0.0},
-        {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group1)],'weight_decay': 0.0, 'lr': cfg.lr/2.6},
+        {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group1)],'weight_decay': 0.0, 'lr': cfg.lr/layerwise_decay},
         {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group2)],'weight_decay': 0.0, 'lr': cfg.lr},
-        {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group3)],'weight_decay': 0.0, 'lr': cfg.lr*2.6},
+        {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group3)],'weight_decay': 0.0, 'lr': cfg.lr*layerwise_decay},
         # other params
         {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in except_patterns)], 'lr':cfg.new_module_lr, "weight_decay": 0.0},
     ]

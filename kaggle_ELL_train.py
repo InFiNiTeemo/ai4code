@@ -92,7 +92,8 @@ def get_model_abbr(model_name):
         "hfl/chinese-roberta-wwm-ext": "rob",
         "hfl/chinese-roberta-wwm-ext-large": "robL",
     }
-    return model_abbr_dict.get(model_name, "unknown")
+    return "model"
+    # return model_abbr_dict.get(model_name, "unknown")
 
 
 def get_logger(filename='train'):
@@ -172,16 +173,18 @@ class CFG:
     oof = False
     apex = True
     parallel: bool = args.on_kaggle and args.parallel
-    is_early_stop: bool = False
     gradient_checkpointing: bool = True
     print_freq = 20
     accumulation_steps: int = 1
-    seed:int = args.seed
+    seed: int = args.seed
     epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
     batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512
     quick_exp = False
     max_grad_norm: int = 1000  # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
+    # early stop
+    is_early_stop: bool = True
+    early_stop_epochs: int = 3
     # pretrain
     is_pretrain: bool = args.is_pretrain
     pretrain_lr = 1e-6
@@ -197,6 +200,7 @@ class CFG:
     is_llrd: bool = True
     lr: float = 1e-5  # also encoder_lr
     weight_decay = 0.01 # 几乎没影响
+    layerwise_decay: float = 2.6
     new_module_lr: float = lr  # 3e-5 45.33,  5e-5 45.31
     # para
     pooler: Any = AttentionPooling
@@ -220,6 +224,7 @@ def load_cfg(cfg_pth, _cfg=None):
     d = pickle.load(open(cfg_pth, "rb"))
     for k, v in d.items():
         cfg.__setattr__(k, v)
+    seed_everything(cfg.seed)
 def show_cfg(cfg_pth):
     tmp_cfg = CFG()
     load_cfg(cfg_pth, tmp_cfg)
@@ -353,7 +358,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     if not cfg.is_pretrain:
         if cfg.is_llrd:
-            optimizer_grouped_parameters = get_optimizer_grouped_parameters_v1(cfg, model)
+            optimizer_grouped_parameters = get_optimizer_grouped_parameters_v1(cfg, model, cfg.layerwise_decay)
                 #get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
         else:
             optimizer_grouped_parameters = [
@@ -385,7 +390,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
         if tmp_best_val_score > best_val_score:
             best_val_score = tmp_best_val_score
             best_epoch = epoch
-        if cfg.is_early_stop and epoch >= best_epoch + 2:
+        if cfg.is_early_stop and epoch >= best_epoch + cfg.early_stop_epochs:
             logger.info("Early stop. ")
             break
 
@@ -586,10 +591,11 @@ def train_pipeline():
 
 def get_logits_fold(test, test_model_path, is_oof=False):
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    # so bad if I change the total max len
     test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
                             total_max_len=cfg.total_max_len,
                             columns=target_columns)
-    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
+    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size*2, shuffle=False, num_workers=args.n_workers,
                              collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                              pin_memory=False, drop_last=False)
 
@@ -727,7 +733,10 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        'new_module_lr': [1e-5, 2e-5, 3e-5, 4e-5, 5e-5]
+        'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
+        'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
+
+
         #"fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
         #"lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
         #"attacker": [FGM, None],
