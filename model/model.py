@@ -319,6 +319,7 @@ class ELLModelv4(nn.Module):
         # print("outputs size:", outputs.size())
         return outputs
 
+
 class ELLModelTest(nn.Module):
     def __init__(self, model_path, cfg, logger=None, verbose=False):
         super(ELLModelTest, self).__init__()
@@ -341,14 +342,14 @@ class ELLModelTest(nn.Module):
         if cfg.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-
         # pooler
-        if cfg.pooler == AttentionPooling:
-            self.pooler = cfg.pooler(hidden_size)
+        # pooler 都是为了把L维去掉
+        if cfg.pooler == AttentionWeightedPooling:
+            self.pooler = cfg.pooler(self.config, logger=logger)
         else:
-            self.pooler = cfg.pooler()
+            self.pooler = cfg.pooler(self.config)
         self.pooling_layers = cfg.pooling_layers
-        if isinstance(self.pooler, MeanMaxPooling):
+        if isinstance(self.pooler, MeanMaxPooling) or isinstance(self.pooler, AttentionMeanPooling):
             linear_size = hidden_size*self.pooling_layers*2
         else:
             linear_size = hidden_size * self.pooling_layers
@@ -396,12 +397,14 @@ class ELLModelTest(nn.Module):
         # origin before 11.13
         # check一下 这里是否用错了
         # out_e = list(self.pooler(self.model(ids, mask)["hidden_states"][-i], mask) for i in range(1, self.pooling_layers+1))
-        # now 11.13
-        # 大家都这么用
-        out_e = list(self.pooler(self.model(ids, mask)[i], mask) for i in range(0, self.pooling_layers))
-
-        # print("out size:", out_e.size())
-        out = torch.cat(out_e, 1)
+        if isinstance(self.pooler, AttentionWeightedPooling):
+            out = self.pooler(torch.stack(self.model(ids, mask)["hidden_states"]), mask)
+        else:
+            # now 11.13
+            # 大家都这么用
+            out_e = list(self.pooler(self.model(ids, mask)[i], mask) for i in range(0, self.pooling_layers))
+            out = torch.cat(out_e, 1)
+        # print("out_e size:", out_e.size())
         # print("out size:", out.size())
         outputs = self.fc(out)
         # print("outputs size:", outputs.size())

@@ -17,7 +17,7 @@ class AWP:
         apex: bool,
         adv_param: str="weight",
         adv_lr: float=1.0,
-        adv_eps: float=0.01
+        adv_eps: float=0.01 # main para to adjust, default 0.01
     ) -> None:
         self.model = model
         self.criterion = criterion
@@ -29,11 +29,11 @@ class AWP:
         self.backup = {}
         self.backup_eps = {}
 
-    def attack_backward(self, inputs: dict, label: Tensor) -> Tensor:
+    def attack_backward(self, inputs, label: Tensor) -> Tensor:
         with torch.cuda.amp.autocast(enabled=self.apex):
             self._save()
             self._attack_step()
-            y_preds = self.model(inputs)
+            y_preds = self.model(*inputs)
             adv_loss = self.criterion(
                 y_preds.view(-1, 1), label.view(-1, 1))
             mask = (label.view(-1, 1) != -1)
@@ -66,7 +66,7 @@ class AWP:
                         self.backup[name] + grad_eps,
                     )
 
-    def _restore(self) -> None:
+    def restore(self) -> None:
         for name, param in self.model.named_parameters():
             if name in self.backup:
                 param.data = self.backup[name]

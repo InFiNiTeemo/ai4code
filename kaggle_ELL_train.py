@@ -39,7 +39,7 @@ parser.add_argument('--eval_times_per_epoch', type=int, default=1)
 parser.add_argument('--seed', type=int, default=37)
 parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--batch_size', type=int, default=None)
-parser.add_argument('--n_workers', type=int, default=8)
+parser.add_argument('--n_workers', type=int, default=2)
 parser.add_argument('--n_folds', type=int, default=1)
 parser.add_argument("--theme", type=str, default=theme)
 # cfg
@@ -159,7 +159,7 @@ def get_attacker(key):
         "awp": AWP,
         None: None
     }
-    return d[key]
+    return d.get(key, None)
 
 @dataclass
 class CFG:
@@ -178,8 +178,8 @@ class CFG:
     accumulation_steps: int = 1
     seed: int = args.seed
     epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
-    batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
-    total_max_len: int = 512
+    batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 6 for train 768 # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
+    total_max_len: int = 512  # boost 2e-4 to 512
     quick_exp = False
     max_grad_norm: int = 1000  # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
     # early stop
@@ -199,11 +199,11 @@ class CFG:
     # lr
     is_llrd: bool = True
     lr: float = 1e-5  # also encoder_lr
+    new_module_lr: float = lr * 2.6  # 3e-5 45.33,  5e-5 45.31
     weight_decay = 0.01 # 几乎没影响
     layerwise_decay: float = 2.6
-    new_module_lr: float = lr  # 3e-5 45.33,  5e-5 45.31
     # para
-    pooler: Any = AttentionPooling
+    pooler: Any = AttentionWeightedPooling # AttentionPooling
     fc_dropout_rate: float = 0.2  # 会有0.2左右的影响
     pooling_layers: int = 1
     is_bert_dp: bool = False
@@ -421,8 +421,10 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
 
     # adversial
     attacker = None
-    if cfg.attacker is not None:
+    if cfg.attacker == FGM:
         attacker = cfg.attacker(model)
+    elif cfg.attacker == AWP:
+        attacker = cfg.attacker(model, criterion, optimizer, apex=True)
 
     def eval_fn(_best_val_score, s):
         y_val, y_pred = validate(model, val_loader)
@@ -464,6 +466,10 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
                 pred = model(*inputs)
                 loss_adv = criterion(pred, target)
                 loss_adv.backward()
+            attacker.restore()
+        elif isinstance(attacker, AWP):
+            loss = attacker.attack_backward(inputs, target)
+            loss.backward()
             attacker.restore()
 
         if (step + 1) % cfg.accumulation_steps == 0:
@@ -535,6 +541,7 @@ def print_info(_cfg=None):
 
 @timeit(logger)
 def train_pipeline():
+    logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
     print_info()
     # read data
     train = pd.read_csv(args.train_path)
@@ -634,6 +641,7 @@ def get_path():
 
 
 def oof_pipeline():
+    logger.info("*" * 8 + "OOF STAGE" + "*" * 8)
     cfg_path, test_model_path = get_path()
     load_cfg(cfg_path)
     logger.info("* OOF model path: " + test_model_path)
@@ -649,6 +657,7 @@ def oof_pipeline():
 
 
 def test_pipeline():
+    logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
     cfg_path, test_model_path = get_path()
     load_cfg(cfg_path)
     logger.info("* Test model path: " + test_model_path)
@@ -733,21 +742,42 @@ def exp_pipeline():
 
     # optuna_optimize()
     meta = {
-        'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
-        'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
+        "pooler": [AttentionWeightedPooling, AttentionPooling],
+        "fc": ["multisample_dropout", None],
+        "attacker": ["fgm", "awp", None]
+        # 'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
+        # 'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
 
-
-        #"fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
-        #"lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
-        #"attacker": [FGM, None],
+        # "fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
+        # "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+        # "attacker": [FGM, None],
         # "is_bert_dp": [False, True],
         # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
         # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
-        #"reinit_layer_num": [0, 1, 2]
+        # "reinit_layer_num": [0, 1, 2]
         # "pooling_layers": [3, 2, 1],
         # [True, False], # False明显改进(再尝试一下)
     }
     greedy_optimize(meta)
+
+    # meta = {
+    #     "attacker": ["fgm"],
+    #
+    #     #'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
+    #     #'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
+    #
+    #
+    #     #"fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
+    #     #"lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+    #     #"attacker": [FGM, None],
+    #     # "is_bert_dp": [False, True],
+    #     # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
+    #     # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
+    #     #"reinit_layer_num": [0, 1, 2]
+    #     # "pooling_layers": [3, 2, 1],
+    #     # [True, False], # False明显改进(再尝试一下)
+    # }
+    # greedy_optimize(meta)
 
 
 def pretrain_set_cfg():
@@ -761,13 +791,10 @@ def main():
         pretrain_set_cfg()
         train_pipeline()
     if args.is_train:
-        logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
         train_pipeline()
     if args.is_oof:
-        logger.info("*" * 8 + "OOF STAGE" + "*" * 8)
         oof_pipeline()
     if args.is_test:
-        logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
         test_pipeline()
     if args.is_experiment_stage:
         exp_pipeline()

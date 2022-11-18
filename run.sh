@@ -16,9 +16,10 @@
 #      --is_train
 
 # train
-#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#python kaggle_ELL_train.py \
+#      --seed 42 \
 #      --n_folds 5 \
-#      --epochs 10 \
+#      --epochs 5 \
 #      --eval_times_per_epoch 3 \
 #      --is_train
 
@@ -27,16 +28,17 @@
 
 #python kaggle_ELL_train.py --n_workers 2 --seed 42\
 #      --n_folds 5 \
-#      --epochs 10 \
+#      --epochs 5 \
 #      --eval_times_per_epoch 3 \
 #      --is_train \
 #      --model_name_or_path "xlm-roberta-base"
 
 
-# train with FGM
-#python kaggle_ELL_train.py --n_workers 2 --seed 43\
+## train with FGM
+#python kaggle_ELL_train.py \
+#      --seed 42 \
 #      --n_folds 5 \
-#      --epochs 10 \
+#      --epochs 5 \
 #      --eval_times_per_epoch 3 \
 #      --is_train \
 #      --attacker "fgm"
@@ -69,43 +71,43 @@ python kaggle_ELL_train.py --n_workers 2 --seed 42\
       --epochs 5 \
       --eval_times_per_epoch 3 \
       --is_exp
-
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --batch_size 4 \
-      --is_train \
-      --model_name_or_path "microsoft/deberta-v3-large"
-
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --batch_size 4 \
-      --is_train \
-      --model_name_or_path "microsoft/deberta-v2-xlarge"
-
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --batch_size 4 \
-      --is_train \
-      --model_name_or_path "microsoft/deberta-v2-xlarge-mnli"
-
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --batch_size 4 \
-      --is_train \
-      --model_name_or_path "microsoft/deberta-v2-xxlarge"
-
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
-      --epochs 5 \
-      --eval_times_per_epoch 3 \
-      --is_train \
-      --batch_size 4 \
-      --model_name_or_path "funnel-transformer-xlarge"
+#
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --batch_size 4 \
+#      --is_train \
+#      --model_name_or_path "microsoft/deberta-v3-large"
+#
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --batch_size 4 \
+#      --is_train \
+#      --model_name_or_path "microsoft/deberta-v2-xlarge"
+#
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --batch_size 4 \
+#      --is_train \
+#      --model_name_or_path "microsoft/deberta-v2-xlarge-mnli"
+#
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --batch_size 4 \
+#      --is_train \
+#      --model_name_or_path "microsoft/deberta-v2-xxlarge"
+#
+#python kaggle_ELL_train.py --n_workers 2 --seed 42\
+#      --n_folds 5 \
+#      --epochs 5 \
+#      --eval_times_per_epoch 3 \
+#      --is_train \
+#      --batch_size 4 \
+#      --model_name_or_path "funnel-transformer-xlarge"
