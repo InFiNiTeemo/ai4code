@@ -180,7 +180,7 @@ class CFG:
     # target columns
     target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
     # dataset
-    MyDataset: Any = ELLDatasetRandomTruncation  # ELLDatasetNoPadding
+    MyDataset: Any = ELLDatasetNoPadding #ELLDatasetRandomTruncation  # ELLDatasetNoPadding
     # model
     MyModel: Any = ELLModelTest  # ELLModelv2
     backbone: Any = args.model_name_or_path  # just to save config
