@@ -34,3 +34,5 @@ llrd_v2 + new_module_lr 1e-5 (exp) + layer_reinit
 8. funnel-transformer-large
 9. bigbird-roberta-large
 10. bigbird-roberta-base
+
+longformer-large, roberta-large, deberta-xxlarge, distilbart_mnli_12_9, bart_large_finetuned_squadv1

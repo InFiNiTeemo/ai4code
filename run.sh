@@ -15,7 +15,7 @@
 #      --eval_times_per_epoch 3 \
 #      --is_train
 
-# train
+#  train
 #python kaggle_ELL_train.py \
 #      --seed 42 \
 #      --n_folds 5 \
@@ -23,9 +23,8 @@
 #      --eval_times_per_epoch 3 \
 #      --is_train
 
+
 # train
-
-
 #python kaggle_ELL_train.py --n_workers 2 --seed 42\
 #      --n_folds 5 \
 #      --epochs 5 \
@@ -61,53 +60,54 @@
 #      --epochs 8 \
 #      --eval_times_per_epoch 3 \
 #      --is_oof \
-#      --test_model_path outputs/kaggle-ELL/exp206
+#      --test_model_path outputs/kaggle-ELL/exp245
 
-
-
-# exp
-python kaggle_ELL_train.py --n_workers 2 --seed 42\
-      --n_folds 5 \
+python kaggle_ELL_train.py --seed 42\
+      --n_folds 10 \
       --epochs 5 \
       --eval_times_per_epoch 3 \
-      --is_exp
-#
+      --batch_size 1 \
+      --is_train \
+      --model_name_or_path "microsoft/deberta-v3-large"
+
+## exp
 #python kaggle_ELL_train.py --n_workers 2 --seed 42\
 #      --n_folds 5 \
 #      --epochs 5 \
 #      --eval_times_per_epoch 3 \
-#      --batch_size 4 \
-#      --is_train \
-#      --model_name_or_path "microsoft/deberta-v3-large"
+#      --is_exp
 #
-#python kaggle_ELL_train.py --n_workers 2 --seed 42\
-#      --n_folds 5 \
+#
+#python kaggle_ELL_train.py --seed 42\
+#      --n_folds 10 \
 #      --epochs 5 \
 #      --eval_times_per_epoch 3 \
-#      --batch_size 4 \
+#      --batch_size 2 \
 #      --is_train \
 #      --model_name_or_path "microsoft/deberta-v2-xlarge"
 #
-#python kaggle_ELL_train.py --n_workers 2 --seed 42\
-#      --n_folds 5 \
+#python kaggle_ELL_train.py --seed 42\
+#      --n_folds 10 \
 #      --epochs 5 \
 #      --eval_times_per_epoch 3 \
-#      --batch_size 4 \
+#      --batch_size 2 \
 #      --is_train \
 #      --model_name_or_path "microsoft/deberta-v2-xlarge-mnli"
 #
 #python kaggle_ELL_train.py --n_workers 2 --seed 42\
-#      --n_folds 5 \
+#      --n_folds 10 \
 #      --epochs 5 \
 #      --eval_times_per_epoch 3 \
-#      --batch_size 4 \
+#      --batch_size 2 \
 #      --is_train \
 #      --model_name_or_path "microsoft/deberta-v2-xxlarge"
 #
 #python kaggle_ELL_train.py --n_workers 2 --seed 42\
-#      --n_folds 5 \
+#      --n_folds 10 \
 #      --epochs 5 \
 #      --eval_times_per_epoch 3 \
 #      --is_train \
-#      --batch_size 4 \
+#      --batch_size 2 \
 #      --model_name_or_path "funnel-transformer-xlarge"
+
+

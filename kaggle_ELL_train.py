@@ -163,25 +163,35 @@ def get_attacker(key):
 
 @dataclass
 class CFG:
-    MyDataset: Any = ELLDatasetNoPadding
-    # model
-    MyModel: Any = ELLModelTest  # ELLModelv2
-    backbone: Any = args.model_name_or_path  # just to save config
-    fc: str = "multisample_dropout"  # or "multisample_dropout"
-    target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
     # setting
     oof = False
     apex = True
     parallel: bool = args.on_kaggle and args.parallel
     gradient_checkpointing: bool = True
     print_freq = 20
-    accumulation_steps: int = 1
+    accumulation_steps: int = 1 # 4 is 1e-2 worse than 1 for bs 8
     seed: int = args.seed
+    n_fold: int = args.n_folds
     epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
     batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 6 for train 768 # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
     total_max_len: int = 512  # boost 2e-4 to 512
     quick_exp = False
     max_grad_norm: int = 1000  # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
+    # target columns
+    target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
+    # dataset
+    MyDataset: Any = ELLDatasetRandomTruncation  # ELLDatasetNoPadding
+    # model
+    MyModel: Any = ELLModelTest  # ELLModelv2
+    backbone: Any = args.model_name_or_path  # just to save config
+    # pooler
+    pooling_layers: int = 1
+    pooler: Any = AttentionPooling #MultiheadAttentionPooling  # AttentionWeightedPooling  # AttentionPooling
+    # fc
+    fc: str = "multisample_dropout"  # or "multisample_dropout"
+    fc_dropout_rate: float = 0.2  # 会有0.2左右的影响
+    is_bert_dp: bool = False
+    reinit_layer_num: int = 1  # 可以使result更加稳定
     # early stop
     is_early_stop: bool = True
     early_stop_epochs: int = 3
@@ -202,12 +212,6 @@ class CFG:
     new_module_lr: float = lr * 2.6  # 3e-5 45.33,  5e-5 45.31
     weight_decay = 0.01 # 几乎没影响
     layerwise_decay: float = 2.6
-    # para
-    pooler: Any = AttentionWeightedPooling # AttentionPooling
-    fc_dropout_rate: float = 0.2  # 会有0.2左右的影响
-    pooling_layers: int = 1
-    is_bert_dp: bool = False
-    reinit_layer_num: int = 1  # 可以使result更加稳定
     # memory
     oof_score = 1e9
 
@@ -239,8 +243,10 @@ def oof():
     oof_df = pd.read_pickle(oof_output_path)
     label = oof_df[target_columns].values
     y_pred = oof_df[[f"pred_{c}" for c in target_columns]].values
-    score = mcrmse(label, y_pred, len(target_columns))
+    score, scores = mcrmse(label, y_pred, len(target_columns), all_score=True)
     logger.info(f'Score: {score:<.4f} ')
+    logger.info(target_columns)
+    logger.info(f'Scores: {scores} ')
     cfg.oof_score = score
 
 
@@ -305,7 +311,7 @@ def get_logits(model, test_loader):
 
 @timeit(logger)
 def train_fold(train_df, val=None, fold=1, **kwargs):
-    logger.info("\n" + "=" * 15 + ">" f"Fold {fold + 1} Training" + "<" + "=" * 15)
+    logger.info("\n" + "=" * 15 + ">" f"Fold {fold} Training" + "<" + "=" * 15)
     save_cfg()
     model_name_or_path = args.model_name_or_path
     # model
@@ -429,6 +435,9 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     def eval_fn(_best_val_score, s):
         y_val, y_pred = validate(model, val_loader)
         score = -mcrmse(y_val, y_pred, len(target_columns))
+        # print(type(y_pred), type(y_val))
+        val_loss = np.mean(np.abs(y_pred - y_val))
+        s = s + f" Val_loss {val_loss:<.4f}"
         if score > _best_val_score:
             s = "[Best] " + s
             _best_val_score = score
@@ -464,11 +473,15 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             attacker.attack()
             with torch.cuda.amp.autocast(enabled=CFG.apex):
                 pred = model(*inputs)
-                loss_adv = criterion(pred, target)
-                loss_adv.backward()
+                loss = criterion(pred, target)
+                if cfg.accumulation_steps > 1:
+                    loss = loss / cfg.accumulation_steps
+                loss.backward()
             attacker.restore()
         elif isinstance(attacker, AWP):
             loss = attacker.attack_backward(inputs, target)
+            if cfg.accumulation_steps > 1:
+                loss = loss / cfg.accumulation_steps
             loss.backward()
             attacker.restore()
 
@@ -529,8 +542,7 @@ def fit_data(df):
 
 
 def print_info(_cfg=None):
-    cur_date_and_time = datetime.now()
-    print("Time:", cur_date_and_time)
+    logger.info(f"Time: {datetime.now().strftime('%m-%d %H:%M')}")
     # Output: The current date and time is 2022-03-19 10:05:39.482383
     if _cfg is None:
         _cfg = cfg
@@ -593,6 +605,8 @@ def train_pipeline():
         output_df.to_csv(save_path, index=False)
 
     save_state()
+    torch.cuda.empty_cache()
+    gc.collect()
     return cv_score
 
 
@@ -740,11 +754,11 @@ def exp_pipeline():
         study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler())
         study.optimize(objective, n_trials=30)
 
+
     # optuna_optimize()
     meta = {
-        "pooler": [AttentionWeightedPooling, AttentionPooling],
-        "fc": ["multisample_dropout", None],
-        "attacker": ["fgm", "awp", None]
+        "attacker": [FGM, AWP],
+        "MyDataset": [ELLDatasetRandomTruncation, ELLDatasetNoPadding],
         # 'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
         # 'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
 

@@ -102,6 +102,23 @@ class AttentionPooling(nn.Module):
         return x
 
 
+class MultiheadAttentionPooling(nn.Module):
+    def __init__(self, config, head=5):
+        super(MultiheadAttentionPooling, self).__init__()
+        self.head = head
+        in_dim = config.hidden_size
+        self.poolers = nn.ModuleList([AttentionPooling(config)] * self.head)
+        self.fc = nn.Linear(in_dim*self.head, in_dim)
+        self.activation = nn.GELU()
+
+    def forward(self, x, mask):
+        all_poolings = list(
+            self.poolers[i](x, mask) for i in range(self.head))  # generator to list
+        x = torch.cat(all_poolings, -1)  # concat use old dimension, stack use new dimension
+        output = self.activation(self.fc(x))
+        return output
+
+
 class AttentionMeanPooling(nn.Module):
     def __init__(self, config):
         super(AttentionMeanPooling, self).__init__()

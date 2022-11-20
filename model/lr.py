@@ -65,7 +65,8 @@ def get_optimizer_grouped_parameters_v1(cfg, model, layerwise_decay=2.6):
         {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group2)],'weight_decay': 0.0, 'lr': cfg.lr},
         {'params': [p for n, p in model.model.named_parameters() if any(nd in n for nd in no_decay) and any(nd in n for nd in group3)],'weight_decay': 0.0, 'lr': cfg.lr*layerwise_decay},
         # other params
-        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in except_patterns)], 'lr':cfg.new_module_lr, "weight_decay": 0.0},
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in except_patterns) and not any(nd in n for nd in no_decay)], 'lr':cfg.new_module_lr, "weight_decay": cfg.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in except_patterns) and any(nd in n for nd in no_decay)], 'lr': cfg.new_module_lr, "weight_decay": 0.0},
     ]
     return optimizer_grouped_parameters
 
