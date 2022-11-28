@@ -5,13 +5,15 @@ from torch.utils import checkpoint
 from transformers import AutoModel, AutoTokenizer, AdamW, get_linear_schedule_with_warmup, \
     AutoModelForSequenceClassification, AutoConfig
 from .pooling.pooling import *
-from .module.multisample_dropout import multilabel_dropout
+from .module.multisample_dropout import *
+
+
 
 
 # set position embeddings, dropout prob by config
 class Rank1MarkdownModel(nn.Module):
     def __init__(self, name, num_classes=1, pretrained=True):
-        super(MarkdownModel, self).__init__()
+        super(Rank1MarkdownModel, self).__init__()
         self.config = AutoConfig.from_pretrained(name)
         self.config.attention_probs_dropout_prob = 0.
         self.config.hidden_dropout_prob = 0.
@@ -87,6 +89,7 @@ class MarkdownModel(nn.Module):
 class ELLModel(nn.Module):
     def __init__(self, model_path, logger=None, layer=5, verbose=False):
         super(ELLModel, self).__init__()
+        self.model_path = model_path
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
@@ -174,6 +177,7 @@ class ELLModelv2(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
+
     def forward(self, ids, mask):
         if self.use_classification_layer:
             x = self.model(ids, mask).logits
@@ -321,8 +325,13 @@ class ELLModelv4(nn.Module):
 
 
 class ELLModelTest(nn.Module):
-    def __init__(self, model_path, cfg, logger=None, verbose=False):
+    def __init__(self, model_path, cfg, logger=None):
         super(ELLModelTest, self).__init__()
+        # settings
+        self.model_path = model_path
+        self.logger = logger
+        self.verbose = cfg.verbose
+        # model
         self.use_classification_layer = False
         self.config = AutoConfig.from_pretrained(model_path)
         self.config.update({'output_hidden_states': True})
@@ -340,10 +349,13 @@ class ELLModelTest(nn.Module):
         else:
             self.model = AutoModel.from_pretrained(model_path, config=self.config)
         if cfg.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
+            if 'funnel-transformer/xlarge' in self.model_path or "funnel-transformer/large" in self.model_path:
+                pass
+            else:
+                self.model.gradient_checkpointing_enable()
 
         # pooler
-        # pooler 都是为了把L维去掉
+        # pooler 都是为了把L维去掉 (B, L, H)
         if cfg.pooler == AttentionWeightedPooling:
             self.pooler = cfg.pooler(self.config, logger=logger)
         else:
@@ -354,17 +366,25 @@ class ELLModelTest(nn.Module):
         else:
             linear_size = hidden_size * self.pooling_layers
 
-        out_features = len(cfg.target_columns)
+        n_out_features = len(cfg.target_columns)
         if cfg.fc == "multisample_dropout":
-            self.fc = multilabel_dropout(cfg.fc_dropout_rate, linear_size, out_features)
+            if self.verbose:
+                logger.info("multisample dropout.")
+            self.fc = multilabel_dropout(self.config, cfg, n_out_features)
+        elif cfg.fc == "multi_dropout":
+            if self.verbose:
+                logger.info("multi_dropout.")
+            self.fc = multi_dropout(self.config, n_out_features)
         else:
-            self.fc = nn.Linear(linear_size, out_features)
+            self.fc = nn.Linear(linear_size, n_out_features)
 
         # init weights
+        self.freeze_layers()
         self.reinit_last_layers(cfg.reinit_layer_num)
         self._init_weights(self.fc)
+        self._init_weights(self.pooler)
 
-        if logger is not None and verbose:
+        if logger is not None and self.verbose:
             logger.info("Model embedding size:" + str(self.model.embeddings.word_embeddings.weight.data.shape))
         # nn.init.xavier_uniform_(self.top.tensor, gain=nn.init.calculate_gain('relu'))
 
@@ -381,13 +401,40 @@ class ELLModelTest(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
+    def freeze_layers(self):
+        flag = True
+        if 'deberta-v2-xxlarge' in self.model_path or 'deberta-v3-xxlarge' in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.layer[:24].requires_grad_(False)
+        elif 'deberta-v2-xlarge' in self.model_path or 'deberta-v3-xlarge' in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.layer[:12].requires_grad_(False)
+        elif 'deberta-large' in self.model_path or 'deberta-v3-large' in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.layer[:16].requires_grad_(False)
+        elif 'deberta-xlarge' in self.model_path or 'deberta-v3-xlarge' in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.layer[:36].requires_grad_(False)
+        elif 'funnel-transformer-xlarge' in self.model_path or "funnel-transformer/xlarge" in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.blocks[:1].requires_grad_(False)
+        elif 'funnel-transformer-large' in self.model_path or "funnel-transformer/large" in self.model_path:
+            self.model.embeddings.requires_grad_(False)
+            self.model.encoder.blocks[:1].requires_grad_(False)
+        else:
+            flag = False
+        if self.logger is not None:
+            self.logger.info(f"{'Is' if flag else 'No'} freeze layers")
+
     def reinit_last_layers(self, layer_num):
         if layer_num <= 0:
             return
         for module in self.model.encoder.layer[-layer_num:].modules():
             self._init_weights(module)
 
-    def forward(self, ids, mask):
+    def forward(self, ids, mask=None):
+        if mask is None:
+            ids, mask = ids
         if self.use_classification_layer:
             x = self.model(ids, mask).logits
             return x

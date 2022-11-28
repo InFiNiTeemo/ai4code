@@ -1,3 +1,13 @@
+from transformers.models.deberta_v2.modeling_deberta_v2 import DebertaV2Embeddings
+# AI4code rank1
+def adjust_learning_rate(optimizer, epoch, args):
+    """Sets the learning rate to the initial LR decayed every 10 epochs"""
+    # lr = args.lr * (0.5 ** (epoch // 10))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = param_group['lr'] * (0.3 ** (epoch // 10))
+
+
+
 def get_optimizer_grouped_parameters(
         model,
         model_type,
@@ -7,14 +17,17 @@ def get_optimizer_grouped_parameters(
         layerwise_learning_rate_decay=0.9,
         is_parallel = False
 ):
+    except_patterns = ["embeddings", "encoder", "model"]
     no_decay = ["bias", "LayerNorm.weight"]
     # initialize lr for task specific layer
+    # todo debug here
     optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if "fc" in n or "pooler" in n],
-            "weight_decay": 0.0,
-            "lr": new_module_lr,
-        },
+        {'params': [p for n, p in model.named_parameters() if
+                    not any(nd in n for nd in except_patterns) and not any(nd in n for nd in no_decay)],
+         'lr': new_module_lr, "weight_decay": weight_decay},
+        {'params': [p for n, p in model.named_parameters() if
+                    not any(nd in n for nd in except_patterns) and any(nd in n for nd in no_decay)],
+         'lr': new_module_lr, "weight_decay": 0.0},
     ]
     # initialize lrs for every layer
     # num_layers = model.model.config.num_hidden_layers
@@ -24,7 +37,10 @@ def get_optimizer_grouped_parameters(
         layers = [model.model.embeddings] + list(model.model.encoder.layer)
     layers.reverse()
     lr = encoder_lr
+    # print("hidden layer num:", len(layers))
     for layer in layers:
+        # print(vars(layer), layer.__class__)
+        # print(layer.requires_grad_)
         lr *= layerwise_learning_rate_decay
         optimizer_grouped_parameters += [
             {

@@ -10,6 +10,7 @@ import optuna
 import argparse
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
@@ -19,6 +20,8 @@ from dataclasses import dataclass, make_dataclass
 from sklearn.metrics import f1_score, classification_report, accuracy_score
 from transformers import get_cosine_schedule_with_warmup, DataCollatorWithPadding, AutoTokenizer, AutoModelWithLMHead
 from typing import Any
+#from tensorboardX import SummaryWriter  # 用于进行可视化
+#from torchviz import make_dot  # not work for my to visualize
 # my lib
 from metrics import *
 from model.model import *
@@ -28,7 +31,9 @@ from model.adversial.AWP import AWP
 from model.adversial.FGM import FGM
 from utils.time_func import timeSince, timeit
 from utils.loss import mcrmse
+from utils.early_stopping import EarlyStopping
 from utils.util import AverageMeter, split_dataset, increment_path
+from utils.scheduler import CosineAnnealingWarmupRestarts
 
 theme = "kaggle-ELL"
 parser = argparse.ArgumentParser(description='Process some arguments')
@@ -36,7 +41,7 @@ parser.add_argument('--model_name_or_path', type=str,
                     default="microsoft/deberta-v3-base")  # #'WENGSYX/Deberta-Chinese-Large')# 'hfl/chinese-macbert-base') #'microsoft/codebert-
 parser.add_argument('--model_abbr', type=str, default=None)
 parser.add_argument('--eval_times_per_epoch', type=int, default=1)
-parser.add_argument('--seed', type=int, default=37)
+parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--batch_size', type=int, default=None)
 parser.add_argument('--n_workers', type=int, default=2)
@@ -115,11 +120,15 @@ def remove_handler(logger):
 
 def seed_everything(seed):
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        #         torch.backends.cudnn.enabled = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 # ** settings ** #
@@ -140,8 +149,7 @@ def set_args():
     _logger = get_logger(filename=logger_path)
     return _output_path, _logger
 output_path, logger = set_args()
-oof_train_path = os.path.join(theme_path, f"oof_{args.seed}.pkl")
-oof_output_path = os.path.join(output_path, f"oof_df_{args.seed}.pkl")
+
 
 
 # ** settings change when project change ** #
@@ -164,23 +172,34 @@ def get_attacker(key):
 @dataclass
 class CFG:
     # setting
+    # due to dependency reason, must put it here
+    use_amp = True
+    verbose = False  # True
     oof = False
-    apex = True
+    apex = False
     parallel: bool = args.on_kaggle and args.parallel
     gradient_checkpointing: bool = True
     print_freq = 20
-    accumulation_steps: int = 1 # 4 is 1e-2 worse than 1 for bs 8
+    accumulation_steps: int = 1  # 尽量不要用 4 is 1e-2 worse than 1 for bs 8
     seed: int = args.seed
     n_fold: int = args.n_folds
     epochs: int = args.epochs  # 5 epochs to exp, 10 epochs to converge
-    batch_size: int = 8 if args.batch_size is None else args.batch_size # 2 for pretrain # 6 for train 768 # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
-    total_max_len: int = 512  # boost 2e-4 to 512
-    quick_exp = False
-    max_grad_norm: int = 1000  # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
+    batch_size: int = 8 if args.batch_size is None else args.batch_size  # 2 for pretrain # 6 for train 768 # 8 for train 512  # can significantly affect performance  # 尝试16 batch线上
+    total_max_len: int = 768  # boost 2e-4 to 512
+    max_grad_norm: int = 1000 if use_amp else 1 # 尝试动态的，随epoch增加减少？  # before exp143 1000 # 可能与scale有关， 去看一下 # bad for 10000
+    # exp
+    quick_exp: bool = False
+    n_exp_stop_fold: int = args.n_exp_stop_fold
+    #########
+    sep: str = "x" * 40
     # target columns
     target_columns = ["cohesion", "syntax", "vocabulary", "phraseology", "grammar", "conventions"]
     # dataset
-    MyDataset: Any = ELLDatasetNoPadding #ELLDatasetRandomTruncation  # ELLDatasetNoPadding
+    MyDataset: Any = ELLDatasetNoPadding  #ELLDatasetRandomTruncation # ELLDatasetNoPadding
+    # scheduler
+    scheduler: Any = None #CosineAnnealingWarmupRestarts
+    # train
+    criterion = nn.SmoothL1Loss(reduction='mean')
     # model
     MyModel: Any = ELLModelTest  # ELLModelv2
     backbone: Any = args.model_name_or_path  # just to save config
@@ -188,13 +207,15 @@ class CFG:
     pooling_layers: int = 1
     pooler: Any = AttentionPooling #MultiheadAttentionPooling  # AttentionWeightedPooling  # AttentionPooling
     # fc
-    fc: str = "multisample_dropout"  # or "multisample_dropout"
+    fc: str = "multisample_dropout"  # "multi_dropout"  # or "multisample_dropout"
     fc_dropout_rate: float = 0.2  # 会有0.2左右的影响
     is_bert_dp: bool = False
     reinit_layer_num: int = 1  # 可以使result更加稳定
+    ##########
+    sep1: str = sep
     # early stop
     is_early_stop: bool = True
-    early_stop_epochs: int = 3
+    early_stop_epochs: int = 4
     # pretrain
     is_pretrain: bool = args.is_pretrain
     pretrain_lr = 1e-6
@@ -203,29 +224,45 @@ class CFG:
     # adversial
     attacker: Any = get_attacker(args.attacker)  # FGM about twice the time
     adversial_kwargs: dict = None  # mutable default dict() is not allowed
+    adv_start_epoch: int = 6 # 5
+    adv_lr: float = 1e-6  # 1e-5
+    adv_eps: float = 0.3
     # optimizer
     betas: tuple = (0.9, 0.999)
     eps: float = 1e-6
+    ##########
+    sep2: str = sep
     # lr
     is_llrd: bool = True
     lr: float = 1e-5  # also encoder_lr
     new_module_lr: float = lr * 2.6  # 3e-5 45.33,  5e-5 45.31
-    weight_decay = 0.01 # 几乎没影响
+    weight_decay = 0.01  # 几乎没影响
     layerwise_decay: float = 2.6
+    ## for cos_annealing
+    max_lr: float = lr
+    min_lr: float = lr * 0.01
     # memory
     oof_score = 1e9
+
+
 
 def save_cfg(pth=None):
     if pth is None:
         pth = output_path
     d = cfg.__dict__
     cfg_pth = os.path.join(pth, "cfg.bin")
-    pickle.dump(d, open(cfg_pth, "wb+"))
+    pickle.dump(d, open(cfg_pth, "wb+"))  # 由于txt无法包含诸如dict，class一类的， 故用binary来存
+    # cfg_txt_pth = os.path.join(pth, "cfg.txt")
+    # pickle.dump(d, open(cfg_pth, "wb+"))
+
 def load_cfg(cfg_pth, _cfg=None):
     if _cfg is None:
         _cfg = cfg
     logger.info("* Load config from: " + cfg_pth)
-    d = pickle.load(open(cfg_pth, "rb"))
+    if cfg_pth.endswith(".bin"):
+        d = pickle.load(open(cfg_pth, "rb"))
+    else:
+        d = pickle.load(open(cfg_pth, "r"))
     for k, v in d.items():
         cfg.__setattr__(k, v)
     seed_everything(cfg.seed)
@@ -237,9 +274,10 @@ def show_cfg(cfg_pth):
 cfg = CFG()
 if args.cfg_path is not None:
     load_cfg(args.cfg_path)
+oof_train_path = os.path.join(theme_path, f"oof_{cfg.seed}_{cfg.n_fold}.pkl")
+# oof_output_path = os.path.join(output_path, f"oof_df_{cfg.seed}_{cfg.n_fold}.pkl")
 
-
-def oof():
+def oof(oof_output_path):
     oof_df = pd.read_pickle(oof_output_path)
     label = oof_df[target_columns].values
     y_pred = oof_df[[f"pred_{c}" for c in target_columns]].values
@@ -257,7 +295,7 @@ def get_state_series():
     stage = "exp" if args.is_experiment_stage else ("train" if args.is_train else "test")
     series["stage"] = stage
     # series["total_max_len"] = cfg.total_max_len
-    series["model_name_or_path"] = args.model_name_or_path
+    series["model_name_or_path"] = cfg.backbone
     return series
 
 
@@ -283,47 +321,50 @@ def validate(model, val_loader):
                 pred = model(*inputs)
             preds.append(pred.detach().cpu().numpy().ravel())  # ravel() -> 1d-array
             labels.append(target.detach().cpu().numpy().ravel())
+    model.train()
     return np.concatenate(labels), np.concatenate(preds)
 
-
-def get_logits(model, test_loader):
-    model.eval()
-
-    tbar = tqdm(test_loader, file=sys.stdout)
-    preds = []
-    labels = []
-
-    with torch.no_grad():
-        for idx, data in enumerate(tbar):
-            inputs, target = read_data(data)
-
-            with torch.cuda.amp.autocast():
-                pred = model(*inputs).argmax(-1)
-
-            preds.append(pred.detach().cpu().numpy().ravel())
-            labels.append(target.detach().cpu().numpy().ravel())
-
-    y_pred = np.concatenate(preds)
-    # test_df['label'] = y_pred
-    # test_df = test_df[['id', 'label']]
-    # test_df.to_csv("submission.csv", index=False, sep='\t')
-    return y_pred
 
 @timeit(logger)
 def train_fold(train_df, val=None, fold=1, **kwargs):
     logger.info("\n" + "=" * 15 + ">" f"Fold {fold} Training" + "<" + "=" * 15)
     save_cfg()
-    model_name_or_path = args.model_name_or_path
+    model_name_or_path = cfg.backbone
     # model
     if cfg.is_pretrain:
         model = AutoModelWithLMHead.from_pretrained(model_name_or_path).cuda()
-    elif "exp" in args.model_name_or_path:
+    elif "exp" in cfg.backbone:
         model_name_or_path = os.path.join(model_name_or_path, f"deb_best_F{fold}.bin")
         logger.info("use pretrained model: " + model_name_or_path)
         model = cfg.MyModel(model_name_or_path, cfg, logger=logger).cuda()
     else:
         model = cfg.MyModel(model_name_or_path, cfg, logger=logger).cuda()
     # model = cfg.MyModel(args.model_name_or_path, logger=logger, dropout_rate=cfg.dropout_rate, pooler=cfg.pooler).cuda()
+
+    # todo visualize
+    # if fold == 0:
+    #     t_input, t_mask = torch.zeros(5,3).long().cuda(), torch.ones(5,3).long().cuda()
+    #     # output = model(t_input, t_mask).cpu()
+    #
+    #     #with SummaryWriter(output_path, comment="sample_model_visualization") as sw:
+    #     #    sw.add_graph(model, [t_input, t_mask])
+    #
+    #     import hiddenlayer as hl
+    #
+    #     transforms = [hl.transforms.Prune('Constant')]  # Removes Constant nodes from graph.
+    #
+    #     graph = hl.build_graph(model, [t_input, t_mask], transforms=transforms)
+    #     graph.theme = hl.graph.THEMES['blue'].copy()
+    #     graph.save(os.path.join(output_path, "pic"), format='png')
+    #     # make_dot(output, params=dict(list(model.named_parameters()))).render(output_path, format="png")
+    #     # torchvz not work
+    #     # g = make_dot(output, params=dict(model.named_parameters()))
+    #     # g.format = "png"
+    #     # g.directory = output_path
+    #     # g.view()
+    #     # g.view(os.path.join(output_path, "model_view"))
+    #     #g.render(os.path.join(output_path, "model_view"), format="png", view=False)
+
     if cfg.parallel:
         model = nn.DataParallel(model)
 
@@ -334,10 +375,11 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     else:
         train = train_df
 
+    logger.info(f"before : train: {len(train)}, test: {len(val)}")
     if args.is_experiment_stage and cfg.quick_exp:
         train = train.head(1000)
         val = val.head(len(val) // 2)
-    # print(f"len dataset: train: {len(train)}, test: {len(val)}")
+        logger.info(f"len dataset: train: {len(train)}, test: {len(val)}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     # dataset
@@ -354,7 +396,7 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=args.n_workers, # if set seed, shuffle with every try is same
                               collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                               pin_memory=True, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size*2, shuffle=False, num_workers=args.n_workers,
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=args.n_workers,
                             collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
                             pin_memory=True, drop_last=False)
 
@@ -365,7 +407,9 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     if not cfg.is_pretrain:
         if cfg.is_llrd:
             optimizer_grouped_parameters = get_optimizer_grouped_parameters_v1(cfg, model, cfg.layerwise_decay)
-                #get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel, **cfg.llrd_kwargs)
+
+
+         # get_optimizer_grouped_parameters(model, cfg.MyModel, encoder_lr=cfg.lr, is_parallel=cfg.parallel)
         else:
             optimizer_grouped_parameters = [
                 {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
@@ -378,35 +422,55 @@ def train_fold(train_df, val=None, fold=1, **kwargs):
     else:
         optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.pretrain_weight_decay)
     train_optimization_steps = int(len(train_ds) / cfg.batch_size * cfg.epochs)
-    num_warmup_steps = train_optimization_steps * 0.02
+    num_warmup_steps = int(train_optimization_steps * 0.02)
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
     #                                            num_training_steps=train_optimization_steps)  # PyTorch scheduler
-    scheduler = get_cosine_schedule_with_warmup(optimizer,
+    if cfg.scheduler == CosineAnnealingWarmupRestarts:
+        scheduler = CosineAnnealingWarmupRestarts(optimizer,
+                                                  first_cycle_steps=train_optimization_steps,
+                                                  cycle_mult=1,
+                                                  max_lr=cfg.max_lr,
+                                                  min_lr=cfg.min_lr,
+                                                  warmup_steps= num_warmup_steps,
+                                                  gamma=1.,
+                                                  last_epoch=-1)
+    else:
+        scheduler = get_cosine_schedule_with_warmup(optimizer,
                                                 num_warmup_steps=0,
                                                 num_cycles=0.5,
                                                 num_training_steps=train_optimization_steps)
 
-    best_epoch = 0
-    best_val_score = -1e9
+    es = EarlyStopping(patience=cfg.early_stop_epochs, max_epoch=cfg.epochs*2)  # will save when early stopping
+    scaler = torch.cuda.amp.GradScaler(enabled=cfg.use_amp)
 
+    # attacker
+    attacker = None
+    if cfg.attacker == FGM:
+        attacker = cfg.attacker(model)
+    elif cfg.attacker == AWP:
+        attacker = cfg.attacker(model, cfg.criterion, optimizer, adv_eps=cfg.adv_eps, adv_lr=cfg.adv_lr, start_epoch=cfg.adv_start_epoch, scaler=scaler)
 
-    for epoch in range(cfg.epochs):
-        tmp_best_val_score = train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer,
-                                          best_val_score)
-        if tmp_best_val_score > best_val_score:
-            best_val_score = tmp_best_val_score
-            best_epoch = epoch
-        if cfg.is_early_stop and epoch >= best_epoch + cfg.early_stop_epochs:
-            logger.info("Early stop. ")
+    n_train_epoch = cfg.epochs if attacker is None else 100
+    for epoch in range(n_train_epoch):
+        train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer,
+                                        es.best_score, es=es, attacker=attacker, scaler=scaler)
+        if es.early_stop:
             break
-
+        # if tmp_best_val_score > best_val_score:
+        #     best_val_score = tmp_best_val_score
+        #     best_epoch = epoch
+        # if cfg.is_early_stop and epoch >= best_epoch + cfg.early_stop_epochs:
+        #     logger.info("Early stop. ")
+        #     break
+    logger.info(f"Best epoch: {es.best_epoch}")
+    logger.info(f"Best score: {es.best_score:<.4f}")
     # del model, train_ds, val_ds, train_loader, val_loader
     torch.cuda.empty_cache()
     gc.collect()
-    return best_val_score
+    return es.best_score
 
 
-def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer, best_val_score=0, **kwargs):
+def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, fold, tokenizer, best_val_score=0, es:EarlyStopping=None, attacker=None, scaler=None, **kwargs):
     """
     Args:
         best_val_score: bigger the better
@@ -415,35 +479,36 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
     model.train()
     # criterion = FocalLoss(class_num=2, alpha=torch.FloatTensor([0.7, 0.3]))  # num in test 0 : 1 = 0.385: 0.615
     # criterion = torch.nn.L1Loss()  # torch.nn.BCEWithLogitsLoss() #torch.nn.CrossEntropyLoss() # torch.nn.CrossEntropyLoss()
-    criterion = nn.SmoothL1Loss(reduction='mean')
-    scaler = torch.cuda.amp.GradScaler()
+    criterion = cfg.criterion# nn.SmoothL1Loss(reduction='mean')
     eval_step = int(len(train_loader) / args.eval_times_per_epoch)
-    start = end = time.time()
+    start = time.time()
 
     # tbar = tqdm(train_loader, file=sys.stdout)
     losses = AverageMeter()
     preds = []
     labels = []
 
-    # adversial
-    attacker = None
-    if cfg.attacker == FGM:
-        attacker = cfg.attacker(model)
-    elif cfg.attacker == AWP:
-        attacker = cfg.attacker(model, criterion, optimizer, apex=True)
 
     def eval_fn(_best_val_score, s):
+        # model_path
+        model_path = os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin")
+        if args.is_experiment_stage and (args.on_kaggle or cfg.quick_exp):  # on kaggle exp do not save
+            model_path = None
+
+        # always bigger the better
         y_val, y_pred = validate(model, val_loader)
         score = -mcrmse(y_val, y_pred, len(target_columns))
         # print(type(y_pred), type(y_val))
-        val_loss = np.mean(np.abs(y_pred - y_val))
+        val_loss = criterion(torch.from_numpy(y_pred), torch.from_numpy(y_val))
         s = s + f" Val_loss {val_loss:<.4f}"
         if score > _best_val_score:
             s = "[Best] " + s
             _best_val_score = score
-            if not (args.is_experiment_stage and args.on_kaggle):   # on kaggle exp do not save
-                torch.save(model.state_dict(),
-                           os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+            # if not (args.is_experiment_stage and (args.on_kaggle or cfg.quick_exp)):   # on kaggle exp do not save
+            #     torch.save(model.state_dict(),
+            #                os.path.join(output_path, f"{model_abbr}_best_F{fold}.bin"))
+        es(epoch, score, model, model_path=model_path)
+
         logger.info("{}, Val score: {:.4f}".format(s, score))
         return round(_best_val_score, 4)
 
@@ -473,17 +538,18 @@ def train_epochs(model, optimizer, scheduler, train_loader, val_loader, epoch, f
             attacker.attack()
             with torch.cuda.amp.autocast(enabled=CFG.apex):
                 pred = model(*inputs)
-                loss = criterion(pred, target)
+                adv_loss = criterion(pred, target)
                 if cfg.accumulation_steps > 1:
-                    loss = loss / cfg.accumulation_steps
-                loss.backward()
+                    adv_loss = adv_loss / cfg.accumulation_steps
+                adv_loss.backward()
             attacker.restore()
         elif isinstance(attacker, AWP):
-            loss = attacker.attack_backward(inputs, target)
-            if cfg.accumulation_steps > 1:
-                loss = loss / cfg.accumulation_steps
-            loss.backward()
-            attacker.restore()
+            if best_val_score > -0.47:
+                attacker.attack_backward(inputs, target, epoch)
+            # if cfg.accumulation_steps > 1:
+            #    loss = loss / cfg.accumulation_steps
+            # loss.backward()
+            # attacker.restore()
 
         if (step + 1) % cfg.accumulation_steps == 0:
             scaler.step(optimizer)
@@ -555,33 +621,38 @@ def print_info(_cfg=None):
 def train_pipeline():
     logger.info("*" * 8 + "TRAIN STAGE" + "*" * 8)
     print_info()
-    # read data
-    train = pd.read_csv(args.train_path)
-    train = fit_data(train)
 
-    # create fold
-    from sklearn.model_selection import StratifiedKFold
-    from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
-    # mskf = StratifiedKFold(n_splits=args.n_folds, shuffle=True) # for single label
-    mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=cfg.seed)  # for multiple labels
-    for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
-        train.loc[val_, "kfold"] = fold
-    train["kfold"] = train["kfold"].astype(int)
-    # save fold
+    # data and fold
     if not os.path.exists(oof_train_path):
+        # read data
+        train = pd.read_csv(args.train_path)
+        train = fit_data(train)
+        # create fold
+        from sklearn.model_selection import StratifiedKFold
+        from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+        # mskf = StratifiedKFold(n_splits=args.n_folds, shuffle=True) # for single label
+        mskf = MultilabelStratifiedKFold(n_splits=args.n_folds, shuffle=True,
+                                         random_state=cfg.seed)  # for multiple labels
+        # for fold, (trn_, val_) in enumerate(mskf.split(train, train[target_columns])):
+        #     train.loc[val_, "kfold"] = fold
+        df = train.copy()
+        y = pd.get_dummies(data=df[cfg.target_columns], columns=cfg.target_columns)
+        for n, (train_index, val_index) in enumerate(mskf.split(X=train, y=y)):
+            train.loc[val_index, 'kfold'] = int(n)
         train.to_pickle(oof_train_path)
+    logger.info("* train data path: " + oof_train_path)
+    train = pd.read_pickle(oof_train_path)
+
+
 
     # logger.info(train[train["kfold"]==1].head(10))
 
     ##
     best_scores = []
-    exp = False
     for f in range(args.n_folds):
         best_val_score = train_fold(train, fold=f)
         best_scores.append(round(best_val_score, 4))
         if args.is_experiment_stage and (args.n_exp_stop_fold is not None and args.n_exp_stop_fold - 1 == f):
-            break
-        if exp:
             break
     cv_score = round(float(np.mean(best_scores)), 4)
     logger.info("**** Best score in every fold: " + str(best_scores))
@@ -609,11 +680,11 @@ def train_pipeline():
     gc.collect()
     return cv_score
 
-
 def get_logits_fold(test, test_model_path, is_oof=False):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    model_name_or_path = cfg.backbone
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     # so bad if I change the total max len
-    test_ds = cfg.MyDataset(test, model_name_or_path=args.model_name_or_path,
+    test_ds = cfg.MyDataset(test, model_name_or_path=model_name_or_path,
                             total_max_len=cfg.total_max_len,
                             columns=target_columns)
     test_loader = DataLoader(test_ds, batch_size=cfg.batch_size*2, shuffle=False, num_workers=args.n_workers,
@@ -625,7 +696,7 @@ def get_logits_fold(test, test_model_path, is_oof=False):
         pth = f"{test_model_path}/{model_abbr}_best_F{fold}.bin"
         # load model
         s = time.time()
-        model = cfg.MyModel(args.model_name_or_path, cfg, logger=logger).cuda()
+        model = cfg.MyModel(model_name_or_path, cfg, logger=logger).cuda()
         if cfg.parallel:
             model = nn.DataParallel(model)
         model.load_state_dict(torch.load(pth))
@@ -644,6 +715,39 @@ def get_logits_fold(test, test_model_path, is_oof=False):
     logit_preds = sum(np.array(logits)) / division  # sum(a) equals sum(a, axis=0)
     return logit_preds
 
+def get_logits_fold_oof(test, test_model_path, is_oof=False):
+    tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
+    # so bad if I change the total max len
+
+    logits = []
+    for fold in range(cfg.n_fold):
+        fold_df = test[test["kfold"] == fold]
+        test_ds = cfg.MyDataset(fold_df, model_name_or_path=cfg.backbone,
+                                total_max_len=cfg.total_max_len,
+                                columns=target_columns)
+        test_loader = DataLoader(test_ds, batch_size=cfg.batch_size * 2, shuffle=False, num_workers=args.n_workers,
+                                 collate_fn=DataCollatorWithPadding(tokenizer=tokenizer, padding='longest'),
+                                 pin_memory=False, drop_last=False)
+
+        pth = f"{test_model_path}/{model_abbr}_best_F{fold}.bin"
+        # load model
+        s = time.time()
+        model = cfg.MyModel(cfg.backbone, cfg, logger=logger).cuda()
+        if cfg.parallel:
+            model = nn.DataParallel(model)
+        model.load_state_dict(torch.load(pth))
+        logger.info(f"Load model fold {fold} cost time: {round(time.time() - s, 2)}s")
+
+        _, pred = validate(model, test_loader)
+        logits.append(pred)
+        del model
+        gc.collect()
+    logit_preds = np.concatenate(logits)
+    print(logit_preds.shape)
+    # division = 1 if is_oof else args.n_folds
+    # logit_preds = sum(np.array(logits)) / division  # sum(a) equals sum(a, axis=0)
+    return logit_preds
+
 def get_path():
     cfg_path = args.cfg_path
     test_model_path = args.test_model_path
@@ -651,28 +755,33 @@ def get_path():
         test_model_path = output_path
     if cfg_path is None:
         cfg_path = os.path.join(test_model_path, "cfg.bin")
-    return cfg_path, test_model_path
+    oof_output_path = os.path.join(test_model_path, "oof_df.pkl")
+    return cfg_path, test_model_path, oof_output_path
 
 
 def oof_pipeline():
     logger.info("*" * 8 + "OOF STAGE" + "*" * 8)
-    cfg_path, test_model_path = get_path()
-    load_cfg(cfg_path)
-    logger.info("* OOF model path: " + test_model_path)
-    print_info()
-    # read data
-    train = pd.read_pickle(oof_train_path)
-    # pred
-    logit_preds = get_logits_fold(train, test_model_path, is_oof=True)
-    class_preds = np.array([x for x in logit_preds]).reshape(-1, len(target_columns))
-    train[[f"pred_{c}" for c in target_columns]] = class_preds
-    train.to_pickle(oof_output_path)
-    oof()
+    cfg_path, test_model_path, oof_output_path = get_path()
+    if not os.path.exists(oof_output_path):
+        load_cfg(cfg_path)
+        oof_train_path = os.path.join(theme_path, f"oof_{cfg.seed}_{cfg.n_fold}.pkl")
+        logger.info("* OOF data path: " + oof_train_path)
+        logger.info("* OOF model path: " + test_model_path)
+        print_info()
+        # read data
+        train = pd.read_pickle(oof_train_path)
+        train = train.sort_values(by="kfold", ascending=True)
+        # pred
+        logit_preds = get_logits_fold_oof(train, test_model_path, is_oof=True)
+        class_preds = np.array([x for x in logit_preds]).reshape(-1, len(target_columns))
+        train[[f"pred_{c}" for c in target_columns]] = class_preds
+        train.to_pickle(oof_output_path)
+    oof(oof_output_path)
 
 
 def test_pipeline():
     logger.info("*" * 8 + "TEST STAGE" + "*" * 8)
-    cfg_path, test_model_path = get_path()
+    cfg_path, test_model_path, _ = get_path()
     load_cfg(cfg_path)
     logger.info("* Test model path: " + test_model_path)
     print_info()
@@ -720,7 +829,9 @@ def exp_pipeline():
             else:
                 for idx, val in enumerate(meta[pivot_col]):
                     set_params(d)
+                    # todo pivot col not in cfg, raise error
                     cfg.__setattr__(pivot_col, val)
+                    logger.info(f"pivot col: {pivot_col},  val: {val}")
                     score = train_pipeline()
                     if score > best_score:
                         best_score = score
@@ -740,12 +851,19 @@ def exp_pipeline():
     # 尽可能用greedy方法
     def optuna_optimize():
         def objective(trial):
+            logger.info("optuna!")
             meta = {
-                'fc_dropout_rate': trial.suggest_float("fc_dropout_rate", 0, 0.5),
-                "is_bert_dp": trial.suggest_categorical("is_bert_dp", [True, False]),
-                'lr': trial.suggest_float("lr", 1e-6, 5e-5),
-                'new_module_lr': trial.suggest_float("new_module_lr", 1e-6, 5e-5),
-                "reinit_layer_num": trial.suggest_int("reinit_layer_num", 0, 1),
+                #'fc_dropout_rate': trial.suggest_float("fc_dropout_rate", 0, 0.5),
+                #"is_bert_dp": trial.suggest_categorical("is_bert_dp", [True, False]),
+                #'lr': trial.suggest_float("lr", 1e-6, 5e-5),
+                #'new_module_lr': trial.suggest_float("new_module_lr", 1e-6, 5e-5),
+                #"reinit_layer_num": trial.suggest_int("reinit_layer_num", 0, 1),
+                "scheduler": trial.suggest_categorical("scheduler", [CosineAnnealingWarmupRestarts]),
+                "quick_exp": trial.suggest_categorical("quick_exp", [True]),
+                "attacker": trial.suggest_categorical("attacker", [AWP]),
+                "adv_lr": trial.suggest_float("adv_lr", 1e-6, 1e-5),
+                "adv_eps": trial.suggest_float("adv_eps", 0.01, 0.5),
+                "adv_start_epoch": trial.suggest_int("adv_start_epoch", 2, 5),
                 # 'n_unit': trial.suggest_int("n_unit", 4, 18)
             }
             val = set_params_and_train(meta)
@@ -755,24 +873,31 @@ def exp_pipeline():
         study.optimize(objective, n_trials=30)
 
 
-    # optuna_optimize()
-    meta = {
-        "attacker": [FGM, AWP],
-        "MyDataset": [ELLDatasetRandomTruncation, ELLDatasetNoPadding],
-        # 'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
-        # 'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
-
-        # "fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
-        # "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
-        # "attacker": [FGM, None],
-        # "is_bert_dp": [False, True],
-        # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
-        # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
-        # "reinit_layer_num": [0, 1, 2]
-        # "pooling_layers": [3, 2, 1],
-        # [True, False], # False明显改进(再尝试一下)
-    }
-    greedy_optimize(meta)
+    optuna_optimize()
+    # meta = {
+    #     "scheduler" : [CosineAnnealingWarmupRestarts],
+    #     "attacker": [AWP],
+    #     "adv_start_epoch": [2, 3, 4, 5],
+    #     "adv_eps": [0.01, 0.03, 0.1, 0.2, 0.3],
+    #     "adv_lr": [1e-5, 3e-5, 3e-6, 1e-6],
+    #     "fc": ["multisample_dropout", "multi_dropout"]
+    #
+    #
+    #     # "MyDataset": [ELLDatasetRandomTruncation, ELLDatasetNoPadding],
+    #     # 'new_module_lr': [2e-5, 3e-5, 4e-5, 5e-5, 1e-5],
+    #     # 'layerwise_decay': [3, 2, 1.5, 2.3, 2.6, 4],
+    #
+    #     # "fc_dropout_rate": [0.1, 0.2, 0.3, 0.4],
+    #     # "lr": [5e-6, 1e-5],  # 尝试过 [1e-5, 2e-5, 3e-5, 4e-5]  1e-5明显改进
+    #     # "attacker": [FGM, None],
+    #     # "is_bert_dp": [False, True],
+    #     # "pooler": [MeanPooling],  # [AttentionPooling, MeanPooling],
+    #     # "fc_dropout_rate": [0, 0.1, 0.15, 0.25, 0.3],
+    #     # "reinit_layer_num": [0, 1, 2]
+    #     # "pooling_layers": [3, 2, 1],
+    #     # [True, False], # False明显改进(再尝试一下)
+    # }
+    # greedy_optimize(meta)
 
     # meta = {
     #     "attacker": ["fgm"],
@@ -816,5 +941,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # save_cfg("outputs/kaggle-ELL/exp65")
+    # load_cfg("outputs/kaggle-ELL/exp346/cfg.bin")
+    # save_cfg("outputs/kaggle-ELL/exp346")
 
